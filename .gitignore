@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Data & generated products (keep the repo code-only)
+data/
+archive/
+*.mseed
+*.msd
+*.npz
+waterfall*.html
+*.png
+!docs/*.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

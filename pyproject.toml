@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infrasound-monitor"
+version = "0.1.0"
+description = "Acquire, convert, and visualize Infiltec INFRA20 infrasound data using standard seismological formats (miniSEED + StationXML)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Kevin Criqui" }]
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "obspy>=1.4",
+    "pyserial>=3.5",
+    "matplotlib>=3.7",
+    "plotly>=5.20",
+]
+
+[project.scripts]
+infra-convert = "infrasound_monitor.convert:main"
+infra-acquire = "infrasound_monitor.acquire:main"
+infra-waterfall = "infrasound_monitor.waterfall:main"
+infra-inventory = "infrasound_monitor.metadata:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

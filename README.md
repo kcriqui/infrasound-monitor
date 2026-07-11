@@ -65,7 +65,24 @@ as a new persistent horizontal line).
 The diurnal (day/night) cycle shows as vertical banding; data gaps are blank columns; a
 persistent narrowband source would appear as a horizontal line.
 
-### 3. Helicorder / drum view (Phase 3 — optional)
+### 3. Live acquisition from the INFRA20 serial port
+
+```bash
+infra-acquire COM4 "C:/Users/you/infra-archive"
+```
+
+Reads the INFRA20's serial stream (**9600 8N1, one signed integer count per
+CRLF line, ~51.4 sps** — confirmed against hardware), timestamps samples from the
+system clock, and appends gap-free, single-rate segments to the SDS day files,
+splitting automatically at UTC midnight and (re)writing `station.xml`. A genuine
+serial dropout leaves an explicit gap; a USB glitch triggers reconnect. Only one
+program can hold the port, so **close AmaSeis first** — this replaces it.
+
+```bash
+infra-acquire COM4 --sniff          # just print raw lines to eyeball the framing
+```
+
+### 4. Helicorder / drum view (Phase 3 — optional)
 
 ```bash
 infra-helicorder "C:/Users/you/infra-archive" 2026-07-01 --out day.png
@@ -92,7 +109,8 @@ Or point **Swarm** / a **SeedLink**/**FDSNWS** server at the SDS archive.
 - [x] Phase 1 — AmaSeis `.Z` reader, `.Z`→miniSEED/SDS converter, StationXML calibration
 - [x] Phase 2 — hourly PSD reduction + interactive spectral waterfall
 - [~] Phase 3 — helicorder wrapper (thin; may defer to Swarm/ObsPy)
-- [ ] Live acquisition daemon (serial INFRA20 → miniSEED / SeedLink) — see `acquire.py`
+- [x] Live acquisition daemon (serial INFRA20 → miniSEED SDS) — `infra-acquire`, framing confirmed
+- [ ] Serve the live archive over SeedLink for real-time views
 
 ## Layout
 

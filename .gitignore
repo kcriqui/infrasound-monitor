@@ -18,6 +18,7 @@ analysis/
 waterfall*.html
 *.png
 !docs/*.png
+sniff_capture*.bin
 
 # Reference material & prior scratch that lives alongside the code (kept on disk)
 *.pdf

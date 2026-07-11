@@ -19,6 +19,9 @@ dependencies = [
     "plotly>=5.20",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.scripts]
 infra-convert = "infrasound_monitor.convert:main"
 infra-acquire = "infrasound_monitor.acquire:main"

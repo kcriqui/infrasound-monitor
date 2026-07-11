@@ -11,12 +11,17 @@ venv/
 # Data & generated products (keep the repo code-only)
 data/
 archive/
+analysis/
 *.mseed
 *.msd
 *.npz
 waterfall*.html
 *.png
 !docs/*.png
+
+# Reference material & prior scratch that lives alongside the code (kept on disk)
+*.pdf
+data file decoding/
 
 # OS / editor
 .DS_Store

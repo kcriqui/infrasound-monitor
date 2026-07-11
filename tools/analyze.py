@@ -64,7 +64,8 @@ def _daterange_utc(start: dt.datetime, end: dt.datetime):
 
 def build_ppsd(cli: Client, inv, seed, start, end, out_dir: Path,
                ppsd_length: float = 3600.0,
-               db_bins: tuple = (-100.0, 20.0, 1.0)) -> PPSD | None:
+               db_bins: tuple = (-100.0, 20.0, 1.0),
+               noise_model=None) -> PPSD | None:
     """Accumulate a PPSD day-by-day (bounded memory) and save its plots.
 
     ``db_bins`` MUST suit pressure data (Pa^2/Hz, roughly -100..0 dB).  ObsPy's
@@ -94,7 +95,7 @@ def build_ppsd(cli: Client, inv, seed, start, end, out_dir: Path,
     seed_id = ".".join(seed)
     p1 = out_dir / f"ppsd_{seed_id}.png"
     p2 = out_dir / f"ppsd_spectrogram_{seed_id}.png"
-    ppsd.plot(filename=str(p1), show_noise_models=False, period_lim=(0.04, 12.0))
+    _plot_ppsd_histogram(ppsd, p1, noise_model=noise_model)
     try:
         ppsd.plot_spectrogram(filename=str(p2), show=False)
     except Exception as e:                      # some obspy builds lack filename kw
@@ -102,11 +103,59 @@ def build_ppsd(cli: Client, inv, seed, start, end, out_dir: Path,
         p2 = None
 
     print(f"\nPPSD over {days} day(s) with data:")
-    print(f"  histogram   -> {p1}")
+    print(f"  histogram   -> {p1}  (with the station's own 10/50/90th-pct noise)")
     if p2:
         print(f"  spectrogram -> {p2}")
     _report_persistent_peak(ppsd)
     return ppsd
+
+
+def _plot_ppsd_histogram(ppsd: PPSD, out_path: Path, noise_model=None):
+    """Save the PPSD with the station's own percentile envelope, plus any
+    external global noise-model curves supplied via ``noise_model``."""
+    import matplotlib.pyplot as plt
+    # ObsPy's built-in noise models are seismic (Peterson) and do not apply to
+    # pressure, so they stay off; the 10/50/90th percentiles are the station's
+    # own low / median / high noise -- the real before/after reference.
+    ppsd.plot(show=False, show_noise_models=False, show_percentiles=True,
+              percentiles=[10, 50, 90], xaxis_frequency=True,
+              period_lim=(0.04, 12.0))
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    for label, freqs, db, style in (noise_model or []):
+        ax.plot(freqs, db, style, lw=1.8, label=label)
+    if noise_model:
+        ax.legend(loc="upper right", fontsize=7)
+    fig.savefig(str(out_path), dpi=110)
+    plt.close(fig)
+
+
+def load_noise_model(path: Path):
+    """Load external global infrasound noise-model curves from a CSV.
+
+    Expected header ``freq_hz,low_db,high_db[,median_db]`` with PSD in dB
+    relative to 1 Pa^2/Hz (the same axis as this PPSD).  Returns a list of
+    ``(label, freqs, db, mpl_style)`` tuples, or [] if the file has no data.
+    Values are NOT bundled -- digitize them from a published source (e.g.
+    Bowman et al. 2005; Brown et al. 2014); see tools/noise_models/.
+    """
+    import csv
+    with open(path, newline="") as fh:
+        rows = list(csv.reader(
+            ln for ln in fh if ln.strip() and not ln.lstrip().startswith("#")))
+    if len(rows) < 2:                          # header only / empty -> nothing to plot
+        return []
+    header = [h.strip() for h in rows[0]]
+    idx = {name: i for i, name in enumerate(header)}
+    if "freq_hz" not in idx:
+        return []
+    data = np.array([[float(x) for x in r] for r in rows[1:]], dtype=float)
+    f = data[:, idx["freq_hz"]]
+    spec = [("low_db", "global low noise", "c--"),
+            ("median_db", "global median", "w-."),
+            ("high_db", "global high noise", "r--")]
+    return [(lbl, f, data[:, idx[col]], st)
+            for col, lbl, st in spec if col in idx]
 
 
 def _report_persistent_peak(ppsd: PPSD, prominence_db: float = 6.0):
@@ -196,6 +245,10 @@ def main(argv=None):
                    help="PPSD lower dB bin edge for pressure PSD (default -100)")
     p.add_argument("--db-max", type=float, default=20.0,
                    help="PPSD upper dB bin edge for pressure PSD (default 20)")
+    p.add_argument("--noise-model", default=None,
+                   help="CSV of external global noise-model curves to overlay "
+                        "(freq_hz,low_db,high_db[,median_db]; dB re Pa^2/Hz). "
+                        "See tools/noise_models/.")
     p.add_argument("--network", default=DEFAULT_STATION.network)
     p.add_argument("--station", default=DEFAULT_STATION.station)
     p.add_argument("--location", default=DEFAULT_STATION.location)
@@ -210,10 +263,17 @@ def main(argv=None):
     out_dir = Path(a.out_dir) if a.out_dir else archive.parent / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    noise_model = []
+    if a.noise_model:
+        noise_model = load_noise_model(Path(a.noise_model))
+        print(f"noise-model overlay: {len(noise_model)} curve(s) from {a.noise_model}"
+              if noise_model else
+              f"noise-model file {a.noise_model} has no data rows (skipping overlay)")
+
     print(f"analyzing {'.'.join(seed)}  {a.start:%Y-%m-%d} -> {a.end:%Y-%m-%d}  "
           f"(out: {out_dir})")
     build_ppsd(cli, inv, seed, a.start, a.end, out_dir, ppsd_length=a.ppsd_length,
-               db_bins=(a.db_min, a.db_max, 1.0))
+               db_bins=(a.db_min, a.db_max, 1.0), noise_model=noise_model)
     if a.dayplot:
         calibrated_dayplot(cli, inv, seed, a.dayplot, out_dir)
 

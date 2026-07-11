@@ -115,7 +115,11 @@ python tools/analyze.py "C:/Users/you/infra-archive" \
 ```
 
 PSD is pressure (Pa²/Hz), so it sets `db_bins` for pressure, not ObsPy's seismic
-default (which would clip pressure PSD at its −50 dB top bin).
+default (which would clip pressure PSD at its −50 dB top bin). The PPSD is drawn
+with the station's own 10/50/90th-percentile noise envelope (the before/after
+reference). Published **global infrasound noise models** (Bowman 2005; Brown 2014)
+can be overlaid with `--noise-model curves.csv` once digitized — none are bundled
+(they're only published as figures); see `tools/noise_models/`.
 
 ## Status
 

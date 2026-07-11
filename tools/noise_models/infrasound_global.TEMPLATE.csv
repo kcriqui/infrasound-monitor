@@ -1,0 +1,5 @@
+# Global infrasound noise model -- TEMPLATE (no values bundled; fill these in).
+# PSD in dB relative to 1 Pa^2/Hz (same axis as tools/analyze.py PPSD).
+# Digitize from Bowman et al. (2005) and/or Brown et al. (2014); see README.md.
+# Delete this comment block's guidance rows are below the header:
+freq_hz,low_db,high_db,median_db

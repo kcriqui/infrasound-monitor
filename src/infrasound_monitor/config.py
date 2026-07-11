@@ -26,14 +26,14 @@ class StationConfig:
     which is appropriate for a private station not registered with the FDSN.
     Channel SDF = S (short-period, 10-80 sps) + D (pressure) + F (infrasound).
     """
-    network: str = "XX"
+    network: str = "XX"           # reserved test code; request an FDSN temp code before sharing
     station: str = "INFRA"        # <= 5 chars
     location: str = "00"
     channel: str = "SDF"
-    site_name: str = "Home infrasound monitor"
-    latitude: float = 0.0
-    longitude: float = 0.0
-    elevation: float = 0.0         # metres
+    site_name: str = "San Jose, CA (INFRA20)"
+    latitude: float = 37.428581   # deg N
+    longitude: float = -121.971208  # deg E (121.971208 W)
+    elevation: float = 0.5         # metres (USGS ground elevation; N. San Jose / Alviso, ~sea level)
     sensor_description: str = "Infiltec INFRA20 microbarometer"
 
     @property

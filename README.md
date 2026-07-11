@@ -115,7 +115,19 @@ python tools/analyze.py "C:/Users/you/infra-archive" \
 ```
 
 PSD is pressure (Pa²/Hz), so it sets `db_bins` for pressure, not ObsPy's seismic
-default (which would clip pressure PSD at its −50 dB top bin). The PPSD is drawn
+default (which would clip pressure PSD at its −50 dB top bin).
+
+To hunt specifically for a **persistent narrowband tone over many days** (the
+datacenter signature), `tools/tonehunt.py` renders a *tone-enhanced* waterfall: it
+subtracts each hour's smooth spectral baseline so the day/night cycle and broadband
+energy drop out and any steady tone appears as a bright horizontal line. It also
+prints the most-persistent frequencies (>~50 % of hours at a fixed frequency = a
+real tone).
+
+```bash
+python tools/tonehunt.py "C:/Users/you/infra-archive" \
+    --start 2026-04-09 --end 2026-07-12 --cache grid.npz   # reuse the waterfall's grid cache
+``` The PPSD is drawn
 with the station's own 10/50/90th-percentile noise envelope (the before/after
 reference). Published **global infrasound noise models** (Bowman 2005; Brown 2014)
 can be overlaid with `--noise-model curves.csv` once digitized — none are bundled

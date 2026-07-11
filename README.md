@@ -104,6 +104,19 @@ st.spectrogram()             # or st.plot(type="dayplot")
 
 Or point **Swarm** / a **SeedLink**/**FDSNWS** server at the SDS archive.
 
+For a ready-made standard-tools analysis, `tools/analyze.py` builds a calibrated
+**PPSD** (McNamara–Buland, `special_handling="hydrophone"` for the flat pressure
+response) plus an optional calibrated dayplot, and reports whether any persistent
+narrowband tone stands out above the background — the datacenter test:
+
+```bash
+python tools/analyze.py "C:/Users/you/infra-archive" \
+    --start 2026-04-09 --end 2026-07-12 --dayplot 2026-07-01
+```
+
+PSD is pressure (Pa²/Hz), so it sets `db_bins` for pressure, not ObsPy's seismic
+default (which would clip pressure PSD at its −50 dB top bin).
+
 ## Status
 
 - [x] Phase 1 — AmaSeis `.Z` reader, `.Z`→miniSEED/SDS converter, StationXML calibration

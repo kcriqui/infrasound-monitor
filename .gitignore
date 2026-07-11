@@ -23,6 +23,9 @@ waterfall*.html
 *.pdf
 data file decoding/
 
+# Claude assistant memory export (personal; synced via Drive, not committed)
+claude-memory/
+
 # OS / editor
 .DS_Store
 Thumbs.db

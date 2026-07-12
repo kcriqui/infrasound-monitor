@@ -127,6 +127,17 @@ real tone).
 ```bash
 python tools/tonehunt.py "C:/Users/you/infra-archive" \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz   # reuse the waterfall's grid cache
+```
+
+For a one-page **station quality + noise report** (an ISPAQ/MUSTANG-style summary —
+ISPAQ itself is Linux/R-only), `tools/report.py` emits a self-contained HTML with
+station metadata, data availability/uptime and gaps, the **PDF-PSD** (probability
+density of hourly PSD, with 10/50/90th percentiles), per-band noise levels (Pa and
+dB SPL), and the persistent-tone verdict — all from the cached grid, in seconds:
+
+```bash
+python tools/report.py "C:/Users/you/infra-archive" \
+    --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ``` The PPSD is drawn
 with the station's own 10/50/90th-percentile noise envelope (the before/after
 reference). Published **global infrasound noise models** (Bowman 2005; Brown 2014)

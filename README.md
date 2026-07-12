@@ -149,6 +149,17 @@ dB SPL), and the persistent-tone verdict — all from the cached grid, in second
 ```bash
 python tools/report.py "C:/Users/you/infra-archive" \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
+```
+
+`tools/dashboard.py` combines everything into a single public **monitoring dashboard**
+(`analysis/index.html`) — a self-contained, static page with summary KPIs, the night
+tone-hunt verdict, the waterfall, PDF-PSD, and availability, all images embedded. It's
+designed to publish as-is to a static host (GitHub Pages / Netlify / S3); regenerate it
+on a schedule to keep it current:
+
+```bash
+python tools/dashboard.py "C:/Users/you/infra-archive" \
+    --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ``` The PPSD is drawn
 with the station's own 10/50/90th-percentile noise envelope (the before/after
 reference). Published **global infrasound noise models** (Bowman 2005; Brown 2014)

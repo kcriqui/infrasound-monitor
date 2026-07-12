@@ -75,6 +75,49 @@ def compute_grid(archive, start: dt.datetime, end: dt.datetime,
                 start=start.isoformat(), end=end.isoformat())
 
 
+def update_grid(cache, archive, cfg: StationConfig = DEFAULT_STATION,
+                nperseg: int = 8192, end: dt.datetime | None = None,
+                verbose: bool = True) -> tuple[dict, int]:
+    """Extend a cached PSD grid up to ``end`` (default: now), computing only the
+    new hours since the cache's last hour and appending them.  Keeps a daily
+    rebuild fast.  Returns (grid, n_new_hours).  Falls back to a full recompute
+    if the frequency axis somehow changed.
+    """
+    grid = load_grid(cache)
+    times = list(grid["times"])
+    freqs = grid["freqs"]
+    end = end or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    end = end.replace(minute=0, second=0, microsecond=0)
+    new_start = times[-1] + dt.timedelta(hours=1)
+    new_hours = [t.datetime for t in _hour_range(new_start, end)]
+    if not new_hours:
+        if verbose:
+            print("grid already current")
+        return grid, 0
+    try:
+        ng = compute_grid(archive, new_start, end, cfg, nperseg=nperseg, verbose=verbose)
+        if len(ng["freqs"]) != len(freqs):
+            if verbose:
+                print("freq axis changed -> full recompute")
+            full = compute_grid(archive, dt.datetime.fromisoformat(str(grid["start"])),
+                                end, cfg, nperseg=nperseg, verbose=verbose)
+            save_grid(full, cache)
+            return full, len(full["times"]) - len(times)
+        new_times = list(ng["times"]); new_psd = ng["psd_db"]
+    except RuntimeError:            # no data yet in the new window -> record as gaps
+        new_times = new_hours
+        new_psd = np.full((len(new_hours), len(freqs)), np.nan)
+
+    merged = dict(grid)
+    merged["times"] = np.array(times + list(new_times))
+    merged["psd_db"] = np.vstack([grid["psd_db"], new_psd])
+    merged["end"] = end.isoformat()
+    save_grid(merged, cache)
+    if verbose:
+        print(f"appended {len(new_times)} hours -> grid now {merged['psd_db'].shape[0]} hours")
+    return merged, len(new_times)
+
+
 def save_grid(grid: dict, path):
     np.savez_compressed(path, **grid)
 

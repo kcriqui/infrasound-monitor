@@ -14,8 +14,10 @@ P_REF_PA = 20e-6              # reference pressure for dB SPL
 
 # ---- Timing ----
 NOMINAL_FS = 51.4287          # measured samples/sec on this unit (nominal ~50)
-# AmaSeis filenames are UTC hours; local wall clock is UTC + this many hours.
-UTC_OFFSET_HOURS = -6
+# Local wall clock = UTC + this. San Jose is America/Los_Angeles: PDT (-7, summer)
+# / PST (-8, winter). A single constant can't track DST, so night-based analysis
+# derives the quiet window empirically from the data rather than trusting this.
+UTC_OFFSET_HOURS = -7   # PDT (summer); previously -6, which was wrong for this site
 
 
 @dataclass

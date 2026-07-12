@@ -129,6 +129,17 @@ python tools/tonehunt.py "C:/Users/you/infra-archive" \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz   # reuse the waterfall's grid cache
 ```
 
+Add `--night` to restrict to the quietest pre-dawn hours (auto-detected from the
+diurnal cycle — no timezone assumptions). A datacenter runs 24/7 but the ambient
+background drops at night, so a steady tone stands out far more; the night view
+renders a nightly-mean waterfall and ranks frequencies **more persistent at night
+than day** (the datacenter-like signature).
+
+```bash
+python tools/tonehunt.py "C:/Users/you/infra-archive" --start ... --end ... \
+    --cache grid.npz --night
+```
+
 For a one-page **station quality + noise report** (an ISPAQ/MUSTANG-style summary —
 ISPAQ itself is Linux/R-only), `tools/report.py` emits a self-contained HTML with
 station metadata, data availability/uptime and gaps, the **PDF-PSD** (probability

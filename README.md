@@ -1,5 +1,12 @@
 # infrasound-monitor
 
+### 🌊 [**Live dashboard → kcriqui.github.io/infrasound-monitor-site**](https://kcriqui.github.io/infrasound-monitor-site/)
+
+Auto-updated daily: spectral waterfall, long-term noise (PDF-PSD), data availability,
+and a night-only persistent-tone hunt for datacenter noise.
+
+---
+
 Acquire, convert, and visualize [Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)
 infrasound data using **standard seismological formats** (miniSEED + StationXML),
 so the data is compatible out-of-the-box with ObsPy, Swarm, PQLX, and the wider

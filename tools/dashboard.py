@@ -328,6 +328,8 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
     calibrated {meta.get('sens',0):.0f} counts/Pa · record {start:%Y-%m-%d} → {end:%Y-%m-%d}.
     Generated {now:%Y-%m-%d %H:%M} from the hourly PSD grid; data stored as standard
     miniSEED + StationXML. Not a substitute for a calibrated regulatory noise survey.</p>
+    <p><a class="link" href="https://github.com/kcriqui/infrasound-monitor">Open source
+    — code, tools, and deployment guide on GitHub →</a></p>
   </footer>
 </div>
 <script>

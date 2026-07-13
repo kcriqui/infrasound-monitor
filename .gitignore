@@ -25,6 +25,10 @@ config.toml
 live.npz
 live.npz.tmp
 
+# Deploy logs and the generated public site
+deploy/*.log
+site/
+
 # Reference material & prior scratch that lives alongside the code (kept on disk)
 *.pdf
 data file decoding/

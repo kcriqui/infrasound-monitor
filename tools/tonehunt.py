@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.ndimage import median_filter
 
-from infrasound_monitor.config import StationConfig, DEFAULT_STATION
+from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
 from infrasound_monitor.psd import compute_grid, save_grid, load_grid
 
 
@@ -179,8 +179,8 @@ def main(argv=None):
                    help="restrict to the quietest hours (auto-detected) -- best datacenter-tone SNR")
     p.add_argument("--night-window", type=int, default=5,
                    help="number of consecutive quiet UTC hours to treat as 'night' (default 5)")
-    p.add_argument("--utc-offset", type=float, default=-7.0,
-                   help="local = UTC + this, for labelling only (San Jose PDT = -7)")
+    p.add_argument("--utc-offset", type=float, default=UTC_OFFSET_HOURS,
+                   help="local = UTC + this, for labelling only (from config.toml)")
     p.add_argument("--network", default=DEFAULT_STATION.network)
     p.add_argument("--station", default=DEFAULT_STATION.station)
     p.add_argument("--location", default=DEFAULT_STATION.location)

@@ -24,7 +24,7 @@ import matplotlib.dates as mdates
 
 import report          # sibling tool (tools/ is on sys.path when run as a script)
 import tonehunt        # sibling tool
-from infrasound_monitor.config import StationConfig, DEFAULT_STATION
+from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
 
 plt.rcParams.update({"font.size": 10, "axes.titlesize": 11, "figure.facecolor": "white"})
 
@@ -66,7 +66,7 @@ def _fig_nightly(day_dt, freqs, night_wf, label):
 
 
 def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
-          baseline_hz=1.0, night_window=5, utc_offset=-7.0):
+          baseline_hz=1.0, night_window=5, utc_offset=UTC_OFFSET_HOURS):
     grid = (report.load_grid(cache) if (cache and Path(cache).exists())
             else report.compute_grid(archive, start, end, cfg, nperseg=nperseg))
     if cache and not Path(cache).exists():
@@ -347,7 +347,7 @@ def main(argv=None):
     p.add_argument("--nperseg", type=int, default=8192)
     p.add_argument("--baseline-hz", type=float, default=1.0)
     p.add_argument("--night-window", type=int, default=5)
-    p.add_argument("--utc-offset", type=float, default=-7.0)
+    p.add_argument("--utc-offset", type=float, default=UTC_OFFSET_HOURS)
     p.add_argument("--network", default=DEFAULT_STATION.network)
     p.add_argument("--station", default=DEFAULT_STATION.station)
     p.add_argument("--location", default=DEFAULT_STATION.location)

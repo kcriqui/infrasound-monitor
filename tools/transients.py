@@ -47,7 +47,8 @@ from obspy import UTCDateTime
 from obspy.clients.filesystem.sds import Client
 from obspy.signal.trigger import classic_sta_lta, trigger_onset
 
-from infrasound_monitor.config import StationConfig, DEFAULT_STATION, PA_PER_COUNT
+from infrasound_monitor.config import (StationConfig, DEFAULT_STATION, PA_PER_COUNT,
+                                        UTC_OFFSET_HOURS)
 
 # label -> (short description, plot color). Heuristic categories; thresholds in
 # classify() are calibrated to indoor data and may need adjusting at a quiet site.
@@ -282,7 +283,7 @@ def main(argv=None):
     p.add_argument("--thr-off", type=float, default=1.6)
     p.add_argument("--min-dur", type=float, default=20.0)
     p.add_argument("--max-dur", type=float, default=600.0)
-    p.add_argument("--utc-offset", type=float, default=-7.0)
+    p.add_argument("--utc-offset", type=float, default=UTC_OFFSET_HOURS)
     p.add_argument("--csv", default=None, help="write the event catalog CSV")
     p.add_argument("--html", default=None, help="write the browsable event-explorer HTML")
     p.add_argument("--top", type=int, default=24, help="# strongest events to feature in the HTML")

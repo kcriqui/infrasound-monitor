@@ -260,7 +260,15 @@ def main(argv=None):
     p.add_argument("--live-seconds", type=float, default=600.0,
                    help="length of the rolling live buffer (s)")
     p.add_argument("--sniff", action="store_true", help="just print raw lines and exit")
+    p.add_argument("--list", action="store_true", help="list available serial ports and exit")
     a = p.parse_args(argv)
+    if a.list:
+        from serial.tools import list_ports
+        ports = list(list_ports.comports())
+        print("available serial ports:" if ports else "no serial ports found")
+        for pi in ports:
+            print(f"  {pi.device}  {pi.description}")
+        return
     port = a.port or SERIAL_PORT
     archive = a.archive or ARCHIVE_DIR
     live_file = a.live_file or LIVE_FILE

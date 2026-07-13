@@ -7,11 +7,11 @@ tails the small rolling **live buffer** the daemon writes (run the daemon with
 of raw pressure, updating ~once a second — the closest thing to AmaSeis's live
 display, without interrupting archiving.
 
-    python tools/live.py                       # uses the default live file
-    python tools/live.py --live-file C:\\Users\\Kevin\\infra-daemon\\live.npz
+    python tools/live.py                       # uses the live file from config.toml
+    python tools/live.py --live-file /path/to/live.npz
     python tools/live.py --snapshot live.png   # render one frame (no window)
 
-The daemon must be running with a matching --live-file (see infra-daemon\\wrapper.ps1).
+The daemon must be running with a matching --live-file (it defaults from config.toml).
 """
 from __future__ import annotations
 import argparse
@@ -20,9 +20,9 @@ from pathlib import Path
 
 import numpy as np
 
-from infrasound_monitor.config import PA_PER_COUNT
+from infrasound_monitor.config import PA_PER_COUNT, LIVE_FILE, UTC_OFFSET_HOURS
 
-DEFAULT_LIVE = r"C:\Users\Kevin\infra-daemon\live.npz"
+DEFAULT_LIVE = LIVE_FILE          # from config.toml [acquisition].live_file
 
 
 def load_live(path):
@@ -87,7 +87,7 @@ def main(argv=None):
     p.add_argument("--live-file", default=DEFAULT_LIVE)
     p.add_argument("--window", type=float, default=600.0, help="total seconds shown (drum height)")
     p.add_argument("--row", type=float, default=60.0, help="seconds per drum row")
-    p.add_argument("--utc-offset", type=float, default=-7.0, help="local = UTC + this")
+    p.add_argument("--utc-offset", type=float, default=UTC_OFFSET_HOURS, help="local = UTC + this")
     p.add_argument("--interval", type=float, default=1.0, help="refresh seconds")
     p.add_argument("--snapshot", default=None, help="render one frame to this PNG and exit (no window)")
     a = p.parse_args(argv)

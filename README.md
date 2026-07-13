@@ -16,6 +16,9 @@ This replaces [AmaSeis](https://www.iris.edu/hq/) for infrasound use: AmaSeis st
 data in a nonstandard hourly `.Z` format with no embedded calibration. Here the data
 is calibrated, self-describing, and portable.
 
+> **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)** — clone, edit
+> `config.toml` for your station, and run `deploy\setup.ps1`.
+
 ## Why these formats
 
 - **miniSEED** is the FDSN standard for geophysical time series, including pressure/

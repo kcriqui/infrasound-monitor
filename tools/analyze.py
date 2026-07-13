@@ -16,11 +16,8 @@ differentiation).  PSD is reported in dB relative to 1 (Pa^2/Hz).
 
 Examples
 --------
-    py = C:\\Users\\Kevin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe
-
-    # PPSD over the whole baseline
-    python tools/analyze.py "G:/My Drive/- My Projects/Infrasound monitor/archive" \
-        --start 2026-04-09 --end 2026-07-12
+    # PPSD over the whole baseline (archive path from your config, or pass one)
+    python tools/analyze.py archive --start 2026-04-09 --end 2026-07-12
 
     # ...plus a calibrated drum plot for one day
     python tools/analyze.py "<archive>" --start 2026-07-01 --end 2026-07-02 \

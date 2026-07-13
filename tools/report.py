@@ -102,7 +102,9 @@ def pdf_psd(freqs, psd, have):
     ax.set_xscale("log"); ax.set_xlim(freqs.min(), freqs.max())
     ax.set_xlabel("Frequency (Hz)"); ax.set_ylabel("PSD (dB re Pa²/Hz)")
     ax.set_title("PDF-PSD — probability density of hourly PSD")
-    ax.legend(loc="upper right", fontsize=8)
+    # dark legend box so the white percentile lines are visible (not white-on-white)
+    ax.legend(loc="upper right", fontsize=8, facecolor="0.12", edgecolor="0.5",
+              framealpha=0.85, labelcolor="white")
     plt.colorbar(pm, ax=ax, label="probability (%)")
     return dict(img=_fig_b64(fig), freqs=freqs, p10=p10, p50=p50, p90=p90)
 

@@ -47,6 +47,12 @@ registers a scheduled task **`InfraAcquire`** that runs the acquisition daemon a
 and restarts it on failure. (Add `-Dashboard` to also register the daily dashboard
 rebuild.) Per-user tasks need no admin.
 
+Verify the setup at any time — this catches most first-run problems:
+
+```powershell
+python tools\doctor.py   # checks Python, deps, config.toml, serial port, writable paths, daemon
+```
+
 ## 4. Acquire and watch
 
 ```powershell
@@ -101,6 +107,7 @@ that **starts at boot and auto-restarts**. Inspect it with:
 systemctl status infra-acquire
 journalctl -u infra-acquire -f           # live log
 sudo systemctl restart infra-acquire     # after editing config.toml
+.venv/bin/python tools/doctor.py         # verify the setup (deps, config, serial port, paths)
 ```
 
 Pi specifics:

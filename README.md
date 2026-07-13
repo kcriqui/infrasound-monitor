@@ -122,7 +122,10 @@ python tools/analyze.py "C:/Users/you/infra-archive" \
 ```
 
 PSD is pressure (Pa²/Hz), so it sets `db_bins` for pressure, not ObsPy's seismic
-default (which would clip pressure PSD at its −50 dB top bin).
+default (which would clip pressure PSD at its −50 dB top bin). The PPSD is drawn with
+the station's own 10/50/90th-percentile noise envelope (the before/after reference);
+published **global infrasound noise models** (Bowman 2005; Brown 2014) can be overlaid
+with `--noise-model curves.csv` once digitized (see `tools/noise_models/`).
 
 To hunt specifically for a **persistent narrowband tone over many days** (the
 datacenter signature), `tools/tonehunt.py` renders a *tone-enhanced* waterfall: it
@@ -167,11 +170,19 @@ on a schedule to keep it current:
 ```bash
 python tools/dashboard.py "C:/Users/you/infra-archive" \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
-``` The PPSD is drawn
-with the station's own 10/50/90th-percentile noise envelope (the before/after
-reference). Published **global infrasound noise models** (Bowman 2005; Brown 2014)
-can be overlaid with `--noise-model curves.csv` once digitized — none are bundled
-(they're only published as figures); see `tools/noise_models/`.
+```
+
+`tools/transients.py` detects **broadband low-frequency transients** (STA/LTA over a
+2–15 Hz band) — candidate trains, aircraft, and local events — cataloging each with its
+time, duration, and peak frequency, and summarizing the time-of-day pattern. It's most
+useful at a quiet outdoor site; a natural follow-up is correlating detections with
+public **train schedules** (GTFS) and **ADS-B flight tracks** (e.g. the OpenSky API) to
+positively identify the sources.
+
+```bash
+python tools/transients.py "C:/Users/you/infra-archive" \
+    --start 2026-06-01 --end 2026-06-22 --csv events.csv --out-dir out --examples 4
+```
 
 ## Status
 

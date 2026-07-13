@@ -89,6 +89,16 @@ program can hold the port, so **close AmaSeis first** — this replaces it.
 infra-acquire COM4 --sniff          # just print raw lines to eyeball the framing
 ```
 
+**Live drum view (AmaSeis-style).** The port is exclusive, so a live viewer can't
+also read it. Run the daemon with `--live-file <local.npz>` and it mirrors the last
+few minutes of raw samples to that local file; `tools/live.py` tails it and renders a
+scrolling helicorder that updates ~once a second — without interrupting archiving:
+
+```bash
+infra-acquire COM4 "C:/Users/you/infra-archive" --live-file C:/Users/you/live.npz
+python tools/live.py --live-file C:/Users/you/live.npz    # live window; --snapshot x.png for one frame
+```
+
 ### 4. Helicorder / drum view (Phase 3 — optional)
 
 ```bash

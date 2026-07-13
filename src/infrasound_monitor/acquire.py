@@ -153,13 +153,40 @@ def _now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def _write_live(path, buf, fs, t_end):
+    """Best-effort atomic dump of the rolling live buffer for a live viewer.
+
+    Written to a *local* path (not the Drive-synced archive) and wrapped so a
+    failure here can never disturb acquisition or the archive.
+    """
+    try:
+        import io, os
+        b = io.BytesIO()
+        np.savez(b, y=np.fromiter(buf, dtype=np.int32), fs=np.float64(fs),
+                 t_end=t_end.isoformat())
+        tmp = str(path) + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(b.getvalue())
+        os.replace(tmp, path)                       # atomic swap -> viewer never sees a partial file
+    except Exception:
+        pass
+
+
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
         fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 2.0,
-        gap_tol: float = 2.0, reconnect_delay: float = 5.0):
-    """Acquire from ``port`` into the SDS ``archive`` until interrupted."""
+        gap_tol: float = 2.0, reconnect_delay: float = 5.0,
+        live_file=None, live_seconds: float = 600.0):
+    """Acquire from ``port`` into the SDS ``archive`` until interrupted.
+
+    If ``live_file`` is set, also mirror the most recent ``live_seconds`` of raw
+    samples into that (local) file every ~2 s so a live viewer can tail it.
+    """
     import serial
+    from collections import deque
 
     writer = SdsWriter(archive, cfg, fs=fs, flush_seconds=flush_seconds, gap_tol=gap_tol)
+    live = deque(maxlen=int(live_seconds * fs)) if live_file else None
+    last_live = 0.0
     print(f"acquiring {port}@{baud} -> {archive}  ({cfg.seed_id}, {fs:.4f} sps)  "
           f"Ctrl-C to stop", flush=True)
     try:
@@ -173,7 +200,13 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
                         c = parse_line(line)
                         if c is None:
                             continue
-                        writer.add(c, _now_utc())
+                        now = _now_utc()
+                        writer.add(c, now)
+                        if live is not None:
+                            live.append(c)
+                            if time.time() - last_live >= 2.0:
+                                _write_live(live_file, live, fs, now)
+                                last_live = time.time()
             except serial.SerialException as e:
                 # USB glitch / cable pull: flush what we have and retry.
                 writer.flush()
@@ -218,6 +251,10 @@ def main(argv=None):
                    help="seconds of post-open data to discard (connect transient)")
     p.add_argument("--gap-tol", type=float, default=2.0,
                    help="a sample this many seconds late ends the run (explicit gap)")
+    p.add_argument("--live-file", default=None,
+                   help="also mirror recent raw samples to this LOCAL file for a live viewer")
+    p.add_argument("--live-seconds", type=float, default=600.0,
+                   help="length of the rolling live buffer (s)")
     p.add_argument("--sniff", action="store_true", help="just print raw lines and exit")
     a = p.parse_args(argv)
     if a.sniff:
@@ -226,6 +263,7 @@ def main(argv=None):
     if not a.archive:
         p.error("archive is required unless --sniff is given")
     run(a.port, a.archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
+        live_file=a.live_file, live_seconds=a.live_seconds,
         warmup=a.warmup, gap_tol=a.gap_tol)
 
 

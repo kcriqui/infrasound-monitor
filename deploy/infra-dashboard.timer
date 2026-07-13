@@ -1,0 +1,10 @@
+# Runs the dashboard rebuild daily at 06:15 local time.
+[Unit]
+Description=Daily INFRA20 dashboard rebuild
+
+[Timer]
+OnCalendar=*-*-* 06:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

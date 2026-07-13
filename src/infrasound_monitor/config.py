@@ -110,6 +110,7 @@ def _resolve(path: str) -> str:
 
 
 # ---- Acquisition / paths (overridable in config.toml [acquisition]) ----
+PROJECT_ROOT = str(_PROJECT_ROOT)
 SERIAL_PORT = _ACQ.get("port", "COM3")
 ARCHIVE_DIR = _resolve(_ACQ.get("archive", "archive"))
 LIVE_FILE = _resolve(_ACQ.get("live_file", "live.npz"))

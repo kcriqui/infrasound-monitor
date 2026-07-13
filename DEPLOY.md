@@ -80,11 +80,44 @@ schedule, set up a static host (e.g. a GitHub Pages repo) at `site\`, then run
 `setup.ps1 -Dashboard` to register the daily rebuild+push (`deploy\publish.ps1`). Build
 the PSD grid cache once first (the `waterfall.py ... --cache` command above).
 
+## Linux / Raspberry Pi
+
+A dedicated Raspberry Pi is the ideal 24/7 monitor — it boots straight into acquiring,
+no login required. Same idea as Windows, but with **systemd** instead of Task Scheduler:
+
+```bash
+git clone https://github.com/kcriqui/infrasound-monitor.git
+cd infrasound-monitor
+cp config.example.toml config.toml      # edit: port = "/dev/ttyUSB0", coordinates, sample_rate
+bash deploy/setup.sh                     # venv install + systemd service (add --dashboard for the daily rebuild)
+sudo systemctl start infra-acquire       # start after editing a freshly-created config
+```
+
+`setup.sh` installs into a project-local `.venv` (Raspberry Pi OS blocks system-wide
+pip), adds you to the `dialout` group for serial access, and installs a systemd service
+that **starts at boot and auto-restarts**. Inspect it with:
+
+```bash
+systemctl status infra-acquire
+journalctl -u infra-acquire -f           # live log
+sudo systemctl restart infra-acquire     # after editing config.toml
+```
+
+Pi specifics:
+- **Serial port:** the INFRA20's USB adapter is usually `/dev/ttyUSB0`
+  (`ls /dev/ttyUSB* /dev/ttyACM*` to find it). Put it in `config.toml`.
+- **First install is slow** — scipy/obspy fetch large ARM wheels (piwheels). Use 64-bit
+  Pi OS and a Pi 4/5 for a smoother time.
+- **Headless = no live window.** `tools/live.py` opens a GUI, so on a headless Pi use
+  `python tools/live.py --snapshot live.png` or the network dashboard. Analysis tools all
+  run headless.
+- Reboot once after the first setup so the `dialout` group fully applies.
+
 ## Notes
 
-- **Windows only, for now.** The acquisition/daemon/analysis code is cross-platform
-  (pyserial + ObsPy); only the scheduled-task wrappers here are Windows-specific.
-  A Linux/systemd + Raspberry Pi path is planned.
 - **One tree.** Everything lives under the project folder: code, `config.toml`, the
-  `archive\`, `analysis\`, and generated `site\`. Put it on a **local** disk (not a
-  network/cloud-synced folder) so the 24/7 daemon writes reliably.
+  `archive/`, `analysis/`, and generated `site/`. Put it on a **local** disk (not a
+  network or cloud-synced folder) so the 24/7 daemon writes reliably.
+- **WSL** is fine for the *analysis* tools, but serial acquisition in WSL2 needs
+  `usbipd-win` to attach the USB device — a native Linux box or Raspberry Pi is simpler
+  for the daemon.

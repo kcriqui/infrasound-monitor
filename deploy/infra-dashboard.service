@@ -1,0 +1,12 @@
+# systemd unit template for the daily dashboard rebuild (run by infra-dashboard.timer).
+# deploy/setup.sh --dashboard substitutes the placeholders and installs it. refresh.py
+# defaults its archive/cache/output from config, so no paths are hard-coded here.
+[Unit]
+Description=INFRA20 dashboard rebuild
+After=network.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT__
+ExecStart=__PYTHON__ tools/refresh.py

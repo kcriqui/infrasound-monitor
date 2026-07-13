@@ -1,0 +1,18 @@
+# systemd unit template for the INFRA20 acquisition daemon.
+# deploy/setup.sh substitutes __USER__ / __PROJECT__ / __PYTHON__ and installs this to
+# /etc/systemd/system/infra-acquire.service. systemd handles restart and boot-start,
+# so no wrapper loop is needed. Port/archive/live paths come from config.toml.
+[Unit]
+Description=INFRA20 infrasound acquisition -> miniSEED SDS
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT__
+ExecStart=__PYTHON__ -m infrasound_monitor.acquire
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

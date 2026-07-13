@@ -228,6 +228,12 @@ section {{ margin-top:40px; }}
 h2 {{ font-size:1.2rem; margin:0 0 4px; font-weight:640; letter-spacing:-.01em;
   text-wrap:balance; }}
 .cap {{ color:var(--muted); font-size:.88rem; margin:4px 0 14px; max-width:70ch; }}
+.explain {{ margin:-6px 0 14px; }}
+.explain summary {{ font-family:var(--mono); font-size:.76rem; color:var(--accent);
+  cursor:pointer; width:fit-content; letter-spacing:.02em; }}
+.explain summary:hover {{ text-decoration:underline; }}
+.explain summary:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
+.explain p {{ color:var(--muted); font-size:.86rem; max-width:70ch; margin:8px 0 0; }}
 .figure {{ background:var(--fig); border:1px solid var(--hair); border-radius:10px;
   padding:10px; overflow-x:auto; }}
 .figure img {{ display:block; width:100%; height:auto; min-width:640px; }}
@@ -293,8 +299,16 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
   <section>
     <p class="eyebrow">Noise characterization</p>
     <h2>Long-term spectrum (PDF-PSD)</h2>
-    <p class="cap">Probability density of the hourly power spectrum (McNamara-Buland),
-    with 10 / 50 / 90th-percentile curves — the standard long-term noise fingerprint.</p>
+    <p class="cap">A noise fingerprint of the whole record. For each frequency, color shows how
+    often (%) each loudness level occurred — bright = the typical level, dark = rare. The three
+    curves are the quiet (10th&nbsp;pct), typical (median), and loud (90th&nbsp;pct) hourly levels.</p>
+    <details class="explain"><summary>How to read this</summary>
+    <p>Each vertical slice is a histogram of the ~2,000 hourly spectra at that frequency. It's a
+    "red" spectrum — loudest at low frequency (wind, weather, microbaroms) and quieter toward
+    20&nbsp;Hz. The wide spread at low frequency is the day/night swing; the tight band up high is
+    the sensor's steady noise floor. A datacenter tone would appear as a bright pip at one fixed
+    frequency <em>and</em> lift the quiet (10th-pct) line there — because even the calmest hours
+    would then carry the tone.</p></details>
     <div class="figure"><img alt="PDF-PSD" src="{imgs['pdf']}"></div>
     <table class="below"><thead><tr><th>Band</th><th class="num">Median dB</th>
     <th class="num">RMS Pa</th><th class="num">dB SPL</th></tr></thead>

@@ -96,14 +96,16 @@ def pdf_psd(freqs, psd, have):
     pdf_m = np.ma.masked_equal(pdf, 0.0)
     vmax = np.percentile(pdf[pdf > 0], 98) if (pdf > 0).any() else 5
     pm = ax.pcolormesh(freqs, db_cent, pdf_m, cmap="viridis", vmin=0, vmax=vmax)
-    ax.plot(freqs, p50, "w-", lw=1.4, label="median")
-    ax.plot(freqs, p10, "w--", lw=1.0, label="10th pct")
-    ax.plot(freqs, p90, "w:", lw=1.0, label="90th pct")
+    l50, = ax.plot(freqs, p50, "w-", lw=1.4)
+    l10, = ax.plot(freqs, p10, "w--", lw=1.0)
+    l90, = ax.plot(freqs, p90, "w:", lw=1.0)
     ax.set_xscale("log"); ax.set_xlim(freqs.min(), freqs.max())
     ax.set_xlabel("Frequency (Hz)"); ax.set_ylabel("PSD (dB re Pa²/Hz)")
     ax.set_title("PDF-PSD — probability density of hourly PSD")
-    # dark legend box so the white percentile lines are visible (not white-on-white)
-    ax.legend(loc="upper right", fontsize=8, facecolor="0.12", edgecolor="0.5",
+    # dark legend box so the white percentile lines are visible (not white-on-white);
+    # ordered top->bottom to match the curves on the plot (90th, median, 10th).
+    ax.legend([l90, l50, l10], ["90th pct", "median", "10th pct"],
+              loc="upper right", fontsize=8, facecolor="0.12", edgecolor="0.5",
               framealpha=0.85, labelcolor="white")
     plt.colorbar(pm, ax=ax, label="probability (%)")
     return dict(img=_fig_b64(fig), freqs=freqs, p10=p10, p50=p50, p90=p90)

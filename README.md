@@ -201,22 +201,29 @@ python tools/transients.py "C:/Users/you/infra-archive" \
 
 ## Status
 
-- [x] Phase 1 — AmaSeis `.Z` reader, `.Z`→miniSEED/SDS converter, StationXML calibration
-- [x] Phase 2 — hourly PSD reduction + interactive spectral waterfall
-- [~] Phase 3 — helicorder wrapper (thin; may defer to Swarm/ObsPy)
-- [x] Live acquisition daemon (serial INFRA20 → miniSEED SDS) — `infra-acquire`, framing confirmed
-- [ ] Serve the live archive over SeedLink for real-time views
+- [x] Acquire → convert → analyze pipeline (miniSEED SDS + StationXML), config-driven
+- [x] Live acquisition daemon (`infra-acquire`) — framing hardware-verified; auto-start service
+- [x] AmaSeis-style live drum viewer (`tools/live.py`)
+- [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
+- [x] Public, auto-updating dashboard (GitHub Pages)
+- [x] Turnkey deploy — Windows + Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`)
+- [ ] Serve the live archive over SeedLink for real-time remote views
+- [ ] Event attribution — correlate transients with train (GTFS) + aircraft (ADS-B) data
+- [ ] Relocate the sensor to a quiet outdoor site for the real "before" baseline
 
 ## Layout
 
 ```
-src/infrasound_monitor/
-  config.py      constants, calibration, station identity
-  amaseis.py     legacy .Z reader
-  metadata.py    StationXML / INFRA20 response
-  convert.py     .Z -> miniSEED SDS archive
-  psd.py         archive -> hourly PSD grid (waterfall backbone)
-  waterfall.py   PSD grid -> interactive HTML waterfall
-  helicorder.py  drum/dayplot view (optional)
-  acquire.py     live serial acquisition (design/stub)
+src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-waterfall/-inventory)
+  config.py      reads config.toml; constants, calibration, station identity
+  amaseis.py     legacy .Z reader          convert.py    .Z -> miniSEED SDS archive
+  metadata.py    StationXML / response     psd.py        archive -> hourly PSD grid (+ update)
+  waterfall.py   grid -> interactive HTML  helicorder.py drum/dayplot
+  acquire.py     live serial acquisition daemon (config-driven; --sniff/--list/--live-file)
+tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dashboard.py ·
+                 transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py
+deploy/          Windows: setup.ps1 / acquire-daemon.ps1 / publish.ps1
+                 Linux:   setup.sh + *.service / *.timer  (systemd)
+config.example.toml  copy to config.toml (git-ignored) and edit for your station
+DEPLOY.md        deployment guide (Windows + Raspberry Pi)
 ```

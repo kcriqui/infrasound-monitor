@@ -299,7 +299,8 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
   <section>
     <p class="eyebrow">Noise characterization</p>
     <h2>Long-term spectrum (PDF-PSD)</h2>
-    <p class="cap">A noise fingerprint of the whole record. For each frequency, color shows how
+    <p class="cap"><strong>PDF-PSD — the probability density function of the power spectral
+    density.</strong> A noise fingerprint of the whole record: for each frequency, color shows how
     often (%) each loudness level occurred — bright = the typical level, dark = rare. The three
     curves are the quiet (10th&nbsp;pct), typical (median), and loud (90th&nbsp;pct) hourly levels.</p>
     <details class="explain"><summary>How to read this</summary>

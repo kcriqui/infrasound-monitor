@@ -172,16 +172,18 @@ python tools/dashboard.py "C:/Users/you/infra-archive" \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ```
 
-`tools/transients.py` detects **broadband low-frequency transients** (STA/LTA over a
-2–15 Hz band) — candidate trains, aircraft, and local events — cataloging each with its
-time, duration, and peak frequency, and summarizing the time-of-day pattern. It's most
-useful at a quiet outdoor site; a natural follow-up is correlating detections with
-public **train schedules** (GTFS) and **ADS-B flight tracks** (e.g. the OpenSky API) to
-positively identify the sources.
+`tools/transients.py` is an **infrasound event explorer**: it detects transients
+(STA/LTA over a 2–15 Hz band), **characterizes** each (duration, spectral centroid,
+bandwidth, tonality, frequency drift), **classifies** them (tonal / rumble / glide /
+burst — heuristic), and writes a browsable **HTML catalog** (timeline coloured by class,
+class breakdown, and a table of notable events with thumbnail spectrograms) plus a CSV.
+Most useful at a quiet outdoor site. The natural next step is **attribution** —
+correlating event times with public **train schedules** (GTFS) and **ADS-B flight
+tracks** (e.g. the OpenSky API) to positively identify sources.
 
 ```bash
 python tools/transients.py "C:/Users/you/infra-archive" \
-    --start 2026-06-01 --end 2026-06-22 --csv events.csv --out-dir out --examples 4
+    --start 2026-06-01 --end 2026-06-22 --html events/index.html --csv events.csv --top 24
 ```
 
 ## Status

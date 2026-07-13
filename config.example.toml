@@ -1,0 +1,37 @@
+# INFRA20 station configuration.
+#
+# Copy this file to  config.toml  and edit it for your station:
+#     copy config.example.toml config.toml      (Windows)
+#     cp   config.example.toml config.toml       (Linux/macOS)
+#
+# config.toml is git-ignored, so your settings are never committed or overwritten
+# by "git pull". Anything you leave out falls back to a sensible default.
+
+[station]
+network  = "XX"        # FDSN network code. XX = reserved "test/temporary"; request a real
+                       # temporary code (fdsn.org) before sharing data publicly.
+station  = "INFRA"     # station code, <= 5 chars
+location = "00"
+channel  = "SDF"       # FDSN channel: S = short-period, D = pressure, F = infrasound
+site_name = "My infrasound station"
+
+# Sensor location, decimal degrees (West longitude and South latitude are NEGATIVE).
+# Needed if you ever share the data so others can locate/compare your station.
+latitude  = 0.0
+longitude = 0.0
+elevation = 0.0        # metres above sea level
+
+# Measured sample rate of YOUR unit. Confirm it by sniffing the serial port
+#   infra-acquire <PORT> --sniff
+# then measuring lines/second over a minute or two. ~51.4 sps is typical.
+sample_rate = 51.4287
+
+# Local time = UTC + this many hours (Pacific Standard = -8, Pacific Daylight = -7,
+# US Eastern Standard = -5, UTC = 0). Used only for labels; a single value can't
+# track daylight saving, so night-based analysis derives the quiet hours from data.
+utc_offset_hours = -8
+
+[acquisition]
+port      = "COM3"     # serial port: COMx on Windows, /dev/ttyUSB0 (or /dev/ttyS0) on Linux
+archive   = "archive"  # miniSEED archive directory (relative to the project, or absolute)
+live_file = "live.npz" # rolling buffer for the live viewer (relative or absolute)

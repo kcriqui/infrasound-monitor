@@ -20,6 +20,11 @@ waterfall*.html
 !docs/*.png
 sniff_capture*.bin
 
+# Per-deployment local config (copy config.example.toml -> config.toml) and live buffer
+config.toml
+live.npz
+live.npz.tmp
+
 # Reference material & prior scratch that lives alongside the code (kept on disk)
 *.pdf
 data file decoding/

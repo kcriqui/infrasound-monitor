@@ -34,7 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import StationConfig, DEFAULT_STATION, NOMINAL_FS
+from .config import (StationConfig, DEFAULT_STATION, NOMINAL_FS,
+                     SERIAL_PORT, ARCHIVE_DIR, LIVE_FILE)
 from .convert import sds_path, _new_trace
 from .metadata import build_inventory
 
@@ -240,8 +241,10 @@ def sniff(port: str, baud: int = 9600, seconds: float = 5.0) -> None:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Live INFRA20 serial acquisition -> miniSEED SDS.")
-    p.add_argument("port", help="serial port, e.g. COM4 or /dev/ttyUSB0")
-    p.add_argument("archive", nargs="?", help="SDS archive root (required unless --sniff)")
+    p.add_argument("port", nargs="?", default=None,
+                   help="serial port, e.g. COM4 or /dev/ttyUSB0 (default: config [acquisition].port)")
+    p.add_argument("archive", nargs="?", default=None,
+                   help="SDS archive root (default: config [acquisition].archive)")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--fs", type=float, default=NOMINAL_FS,
                    help="sample rate written to the miniSEED headers (sps)")
@@ -252,18 +255,20 @@ def main(argv=None):
     p.add_argument("--gap-tol", type=float, default=2.0,
                    help="a sample this many seconds late ends the run (explicit gap)")
     p.add_argument("--live-file", default=None,
-                   help="also mirror recent raw samples to this LOCAL file for a live viewer")
+                   help="mirror recent raw samples to this LOCAL file for a live viewer "
+                        "(default: config [acquisition].live_file)")
     p.add_argument("--live-seconds", type=float, default=600.0,
                    help="length of the rolling live buffer (s)")
     p.add_argument("--sniff", action="store_true", help="just print raw lines and exit")
     a = p.parse_args(argv)
+    port = a.port or SERIAL_PORT
+    archive = a.archive or ARCHIVE_DIR
+    live_file = a.live_file or LIVE_FILE
     if a.sniff:
-        sniff(a.port, a.baud)
+        sniff(port, a.baud)
         return
-    if not a.archive:
-        p.error("archive is required unless --sniff is given")
-    run(a.port, a.archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
-        live_file=a.live_file, live_seconds=a.live_seconds,
+    run(port, archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
+        live_file=live_file, live_seconds=a.live_seconds,
         warmup=a.warmup, gap_tol=a.gap_tol)
 
 

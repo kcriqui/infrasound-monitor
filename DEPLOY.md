@@ -1,6 +1,7 @@
 # Deploying the INFRA20 monitor
 
-Stand up the tool on your own Windows PC. You need an **Infiltec INFRA20** on a
+Stand up the tool on your own Windows PC. You need an
+**[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
 serial/USB port and **Python 3.10+**. (Linux / Raspberry Pi support is planned — see
 the end.)
 

@@ -324,7 +324,8 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
   </section>
 
   <footer>
-    <p>Station <code>{cfg.seed_id}</code> · Infiltec INFRA20 microbarometer ·
+    <p>Station <code>{cfg.seed_id}</code> ·
+    <a class="link" href="https://www.infiltec.com/Infrasound@home/">Infiltec INFRA20 microbarometer</a> ·
     calibrated {meta.get('sens',0):.0f} counts/Pa · record {start:%Y-%m-%d} → {end:%Y-%m-%d}.
     Generated {now:%Y-%m-%d %H:%M} from the hourly PSD grid; data stored as standard
     miniSEED + StationXML. Not a substitute for a calibrated regulatory noise survey.</p>

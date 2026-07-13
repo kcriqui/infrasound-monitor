@@ -1,0 +1,17 @@
+# Normalize line endings in the repo (LF), with per-type checkout rules so files
+# work on their target platform regardless of the contributor's git settings.
+* text=auto
+
+# Must be LF -- these run on Linux / Raspberry Pi:
+*.sh       text eol=lf
+*.service  text eol=lf
+*.timer    text eol=lf
+
+# Windows scripts -- CRLF:
+*.ps1      text eol=crlf
+
+# Binaries -- never touch:
+*.png  binary
+*.npz  binary
+*.pdf  binary
+*.bin  binary

@@ -242,6 +242,7 @@ th,td {{ text-align:left; padding:6px 10px; border-bottom:1px solid var(--hair);
 th {{ font-family:var(--mono); font-size:.66rem; text-transform:uppercase;
   letter-spacing:.07em; color:var(--muted); font-weight:600; }}
 td.num, th.num {{ text-align:right; font-variant-numeric:tabular-nums; font-family:var(--mono); }}
+table.below {{ width:auto; min-width:min(560px,100%); max-width:560px; margin-top:14px; }}
 .link {{ color:var(--accent); text-decoration:none; font-family:var(--mono); font-size:.8rem; }}
 .link:hover {{ text-decoration:underline; }}
 footer {{ margin-top:52px; padding-top:18px; border-top:1px solid var(--hair);
@@ -294,12 +295,10 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
     <h2>Long-term spectrum (PDF-PSD)</h2>
     <p class="cap">Probability density of the hourly power spectrum (McNamara-Buland),
     with 10 / 50 / 90th-percentile curves — the standard long-term noise fingerprint.</p>
-    <div class="grid2">
-      <div class="figure"><img alt="PDF-PSD" src="{imgs['pdf']}"></div>
-      <table><thead><tr><th>Band</th><th class="num">Median dB</th>
-      <th class="num">RMS Pa</th><th class="num">dB SPL</th></tr></thead>
-      <tbody>{band_tbl}</tbody></table>
-    </div>
+    <div class="figure"><img alt="PDF-PSD" src="{imgs['pdf']}"></div>
+    <table class="below"><thead><tr><th>Band</th><th class="num">Median dB</th>
+    <th class="num">RMS Pa</th><th class="num">dB SPL</th></tr></thead>
+    <tbody>{band_tbl}</tbody></table>
   </section>
 
   <section>

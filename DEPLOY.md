@@ -310,10 +310,132 @@ Pi specifics:
 - **First install is slow** — even from piwheels, scipy/obspy are large ARM wheels.
 - **Storage:** the INFRA20 writes only ~10 MB/day (~3.5 GB/year), so a 16 GB card holds
   a couple of years after the OS + venv; plan to grow the card or prune before it fills.
+  For a long-running station, moving to a USB SSD lifts both the capacity and the SD
+  card's write-endurance limit — see "Moving the OS + archive to a USB SSD" below.
 - **Headless = no live window.** `tools/live.py` opens a GUI; on a headless Pi use
   `tools/live.py --snapshot live.png`, the TFT panel, or the web dashboard. Analysis
   tools all run headless.
 - Reboot once after the first setup so the `dialout`/`spi`/`gpio` groups fully apply.
+
+### Moving the OS + archive to a USB SSD
+
+The archive is a continuous ~10 MB/day write and swap adds more, so on a long-running
+station the SD card is the wear item — and it holds the irreplaceable baseline. Cloning
+the card to a USB SSD moves the OS, the archive *and* swap onto it in one step and retires
+the card entirely, which is tidier than leaving the OS on the card and only the data on
+the SSD. It also raises the storage ceiling from a 16 GB card to whatever the SSD is.
+
+**Prerequisite: the board must boot from USB.** A **Pi 3B+** and **Pi 4** can; a plain
+**Pi 3B** needs a one-time OTP bit (`program_usb_boot_mode=1`) that is **permanent and
+irreversible**. Confirm before starting:
+
+```bash
+vcgencmd otp_dump | grep 17:      # 17:3020000a = USB boot enabled
+```
+
+A Pi boot disk **cannot be a single partition** — the bootloader reads the kernel from a
+FAT32 partition, so you need the small `/boot/firmware` plus an ext4 root. The root can
+and should span the whole rest of the disk.
+
+> **Identify the target disk by model, not by device letter.** If a USB backup drive is
+> also attached, `/dev/sda` is quite likely *that* drive, not the SSD — and the commands
+> below would wipe it. USB enumeration order is not stable across reboots, so re-check
+> every time:
+>
+> ```bash
+> lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS
+> findmnt /mnt/usb           # whatever this shows is the drive to leave alone
+> ```
+>
+> Substitute your SSD's device for `/dev/sdX` throughout.
+
+```bash
+sudo systemctl stop infra-dashboard.timer infra-backup.timer   # no data gap from these
+
+sudo wipefs -a /dev/sdX1 /dev/sdX2 2>/dev/null; sudo wipefs -a /dev/sdX
+sudo parted /dev/sdX --script mklabel msdos \
+  mkpart primary fat32 1MiB 513MiB \
+  mkpart primary ext4 513MiB 100%
+sudo mkfs.vfat -F32 /dev/sdX1 && sudo mkfs.ext4 -F /dev/sdX2
+
+sudo mkdir -p /mnt/ssd && sudo mount /dev/sdX2 /mnt/ssd
+sudo mkdir -p /mnt/ssd/boot/firmware && sudo mount /dev/sdX1 /mnt/ssd/boot/firmware
+```
+
+Copy in **two passes**, so acquisition keeps running through the slow bulk transfer and
+the gap is only the second pass plus the reboot (~2–4 minutes, mostly the reboot):
+
+```bash
+# PASS 1 -- daemon still running. Moves the bulk; inconsistent files are fine.
+sudo rsync -aHAX --one-file-system --info=progress2 / /mnt/ssd/
+sudo rsync -aHAX --info=progress2 /boot/firmware/ /mnt/ssd/boot/firmware/
+
+sudo systemctl stop infra-acquire        # the recording gap starts here
+
+# PASS 2 -- only what changed; seconds.
+sudo rsync -aHAX --one-file-system --delete --info=progress2 / /mnt/ssd/
+sudo rsync -aHAX --delete --info=progress2 /boot/firmware/ /mnt/ssd/boot/firmware/
+```
+
+`--one-file-system` keeps rsync out of `/proc`, `/sys`, `/dev` and your mount points; the
+second command is needed because `/boot/firmware` is its own FAT partition. Stopping the
+daemon before pass 2 lets it close the current miniSEED day file, so the SSD gets a
+properly terminated file rather than a torn final record that the daemon would then append
+to. `--delete` on pass 2 only, and check your trailing slashes — it is unforgiving if
+pointed at the wrong target.
+
+**Repoint the bootloader — after pass 2, or pass 2 overwrites these edits** and the Pi
+boots the SSD's kernel while mounting the *SD card's* root, which is silent and confusing:
+
+```bash
+sudo blkid /dev/sdX2       # note the PARTUUID
+```
+
+On the **SSD copy**, set `root=PARTUUID=…` in `/mnt/ssd/boot/firmware/cmdline.txt`, and
+update the `/` and `/boot/firmware` entries in `/mnt/ssd/etc/fstab`. Leave any other fstab
+lines (e.g. a `/mnt/usb` backup drive) alone.
+
+Then `sudo sync && sudo shutdown -h now`, **physically remove the SD card**, and power on —
+with no card present the Pi falls back to USB, so there is no boot-order setting to change
+on a 3B+. Verify before trusting it:
+
+```bash
+findmnt /                  # must show your SSD, not /dev/mmcblk0p2
+swapon --show
+systemctl status infra-acquire
+curl -s localhost:8080/status.json      # age_s small, today_mb climbing
+```
+
+Let one nightly rebuild run and check `deploy/publish.log` for a `pushed` line, then
+**keep the SD card untouched** as a rollback — two-minute recovery if the SSD misbehaves,
+and a point-in-time snapshot of the archive. Because this is a clone, the hostname, SSH
+host keys, VPN identity, deploy key and systemd units all carry over unchanged.
+
+On a Pi 3B+ the USB bus is 2.0 and shared with Ethernet, so expect **endurance and
+capacity, not speed**. If it won't boot at all, suspect the USB–SATA bridge rather than the
+procedure — some are not compatible with Pi 3 USB boot.
+
+> **fstab edits can silently unmount a live filesystem.** systemd generates mount units
+> from `/etc/fstab`, and regenerating them can take an unrelated mount down with it — a
+> backup drive that quietly disappears is easy to miss. Run `sudo systemctl daemon-reload`
+> after any fstab change, and re-check `df -h` for the mounts you expect.
+
+**Later moving the SSD to another Pi.** Almost everything travels with the disk: the
+PARTUUIDs don't change, so `cmdline.txt`/`fstab` stay valid, and Raspberry Pi OS ships
+kernels and DTBs for every model. The exception is a **Pi 4**, which boots from SPI EEPROM
+and may not have USB in its boot order. Updating that generally needs the Pi booted from
+something else first, so use the old SD card — with the **sensor unplugged**, or the daemon
+will start writing to that card's stale archive and create a divergent copy:
+
+```bash
+sudo rpi-eeprom-update -a
+sudo raspi-config          # Advanced Options -> Boot Order -> USB Boot
+```
+
+Then shut down, remove the card, and move the SSD to a **blue USB 3** port. Check
+`ls /dev/ttyUSB*` afterwards — a different USB controller can change enumeration — and use
+a proper **USB-C 3 A** supply, since undervoltage on a Pi 4 with an SSD attached causes
+intermittent faults that are miserable to diagnose headless.
 
 ## Notes
 

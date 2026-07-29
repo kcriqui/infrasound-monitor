@@ -203,13 +203,17 @@ data never touches your real baseline:
 # terminal 1 -- fake sensor; note the /dev/pts/N it prints
 .venv/bin/python tools/sim_infra20.py
 
-# terminal 2 -- acquire from it into a throwaway dir
-.venv/bin/python -m infrasound_monitor.acquire /dev/pts/N /tmp/testarch --live-file /tmp/live.npz
+# terminal 2 -- acquire from it into a throwaway archive dir. Omit --live-file so it
+# writes the live buffer to the config path the display reads (config.toml live_file,
+# default <project>/live.npz); the archive still goes to the scratch dir.
+.venv/bin/python -m infrasound_monitor.acquire /dev/pts/N /tmp/testarch
 ```
 
 Let it run a minute, then Ctrl-C. That exercises the full path — miniSEED writing, the
 rolling `live.npz`, gap handling. With both running, the **PiTFT LIVE page** should show
 `OK`, a ~3 Hz tone and a level, which also confirms the panel, SPI, wiring and buttons.
+(The display always reads `live_file` from `config.toml`; if you point acquire's
+`--live-file` somewhere else the panel will show `NO DATA` even though acquisition works.)
 To rehearse the analysis + publish path, `scp` a few days of real archive from the PC and
 run `tools/report.py` / `tools/dashboard.py` against it. Then `.venv/bin/python tools/doctor.py`
 for the overall check (its serial-port test is the only thing that should fail until the

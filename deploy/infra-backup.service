@@ -1,0 +1,14 @@
+# systemd unit template for the nightly archive backup (run by infra-backup.timer).
+# deploy/setup.sh --backup <DEST> substitutes __USER__ / __PROJECT__ / __BACKUP_DEST__
+# and installs it. The destination is any rsync target (a mounted disk path or user@host:path).
+[Unit]
+Description=INFRA20 archive backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT__
+Environment=INFRA_BACKUP_DEST=__BACKUP_DEST__
+ExecStart=/bin/bash deploy/backup.sh

@@ -221,9 +221,11 @@ src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-wate
   waterfall.py   grid -> interactive HTML  helicorder.py drum/dayplot
   acquire.py     live serial acquisition daemon (config-driven; --sniff/--list/--live-file)
 tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dashboard.py ·
-                 transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py
+                 transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py ·
+                 tft_status.py (Raspberry Pi Mini PiTFT status display)
 deploy/          Windows: setup.ps1 / acquire-daemon.ps1 / publish.ps1
-                 Linux:   setup.sh + *.service / *.timer  (systemd)
+                 Linux:   setup.sh (--dashboard/--display/--swap/--backup) + backup.sh
+                          + *.service / *.timer  (systemd: acquire / dashboard / display / backup)
 config.example.toml  copy to config.toml (git-ignored) and edit for your station
 DEPLOY.md        deployment guide (Windows + Raspberry Pi)
 ```

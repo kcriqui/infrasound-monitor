@@ -1,0 +1,19 @@
+# systemd unit template for the Mini PiTFT status display (tools/tft_status.py).
+# deploy/setup.sh --display substitutes __USER__ / __PROJECT__ / __PYTHON__ and installs
+# this to /etc/systemd/system/infra-display.service. The user must be in the 'spi' and
+# 'gpio' groups and SPI must be enabled (setup.sh --display does both).
+[Unit]
+Description=INFRA20 Mini PiTFT status display
+After=infra-acquire.service
+Wants=infra-acquire.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT__
+ExecStart=__PYTHON__ tools/tft_status.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

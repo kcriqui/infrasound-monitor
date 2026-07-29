@@ -21,6 +21,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# Raspberry Pi Mini PiTFT status display (tools/tft_status.py). Pillow comes in via
+# matplotlib already; these add the ST7789 driver + CircuitPython GPIO/SPI layer.
+display = [
+    "adafruit-circuitpython-rgb-display>=3.11",
+    "adafruit-blinka>=8.0",
+    "pillow>=9.0",
+]
 
 [project.scripts]
 infra-convert = "infrasound_monitor.convert:main"

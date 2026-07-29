@@ -1,0 +1,10 @@
+# Runs the archive backup nightly at 04:30 local time (before the 06:15 dashboard rebuild).
+[Unit]
+Description=Daily INFRA20 archive backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

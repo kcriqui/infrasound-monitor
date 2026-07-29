@@ -114,22 +114,36 @@ schedule, set up a static host (e.g. a GitHub Pages repo) at `site\`, then run
 `setup.ps1 -Dashboard` to register the daily rebuild+push (`deploy\publish.ps1`). Build
 the PSD grid cache once first (the `waterfall.py ... --cache` command above).
 
-## Linux / Raspberry Pi
+## Raspberry Pi (recommended 24/7 build)
 
-A dedicated Raspberry Pi is the ideal 24/7 monitor — it boots straight into acquiring,
-no login required. Same idea as Windows, but with **systemd** instead of Task Scheduler:
+A dedicated Raspberry Pi is the ideal always-on monitor — it boots straight into
+acquiring with **no login required**, so it rides through power cuts and updates that
+would strand the Windows box (see "Surviving reboots" above). A **Pi 3B (1 GB)** is
+enough to run *everything* — acquisition, the nightly analysis + site rebuild, and a
+small status screen — as long as you add swap; a Pi 4/5 just does the analysis faster.
+
+**Distro:** flash **Raspberry Pi OS Lite (64-bit, Bookworm)** with Raspberry Pi Imager.
+No desktop is needed — the tools run headless and the optional TFT is drawn by a Python
+script. Use Imager's gear menu to preset the **hostname, SSH, Wi-Fi and locale** so it's
+headless from first boot. 64-bit matters: it gets prebuilt ARM wheels for numpy/scipy/
+obspy from **piwheels**, so there's no hours-long source compile.
 
 ```bash
 git clone https://github.com/kcriqui/infrasound-monitor.git
 cd infrasound-monitor
-cp config.example.toml config.toml      # edit: port = "/dev/ttyUSB0", coordinates, sample_rate
-bash deploy/setup.sh                     # venv install + systemd service (add --dashboard for the daily rebuild)
+cp config.example.toml config.toml       # edit: port = "/dev/ttyUSB0", coordinates, sample_rate
+
+# Full build: acquisition + daily dashboard + Mini PiTFT display + swap + nightly backup
+bash deploy/setup.sh --dashboard --display --swap --backup user@nas:/infra-backup
+
 sudo systemctl start infra-acquire       # start after editing a freshly-created config
+sudo reboot                              # once, so dialout/spi/gpio groups + SPI apply
 ```
 
 `setup.sh` installs into a project-local `.venv` (Raspberry Pi OS blocks system-wide
-pip), adds you to the `dialout` group for serial access, and installs a systemd service
-that **starts at boot and auto-restarts**. Inspect it with:
+pip), adds you to the `dialout` group, and installs systemd units that **start at boot
+and auto-restart**. Every flag is optional — plain `bash deploy/setup.sh` installs just
+the acquisition daemon. Inspect it with:
 
 ```bash
 systemctl status infra-acquire
@@ -138,15 +152,53 @@ sudo systemctl restart infra-acquire     # after editing config.toml
 .venv/bin/python tools/doctor.py         # verify the setup (deps, config, serial port, paths)
 ```
 
+### `--swap` — keep the analysis from OOM-ing (do this on a 1 GB Pi)
+
+The analysis step (PPSD, wide-range renders) can exceed 1 GB of RAM and get OOM-killed.
+`--swap` bumps the swapfile to 2 GB so it completes — slower, but it finishes. The design
+already helps: `psd.py` keeps an incremental grid cache, so each nightly run only
+processes the *new* hours and the pages render from the cached grid, not the raw archive.
+
+### `--display` — Mini PiTFT 1.14" status screen
+
+`--display` installs the `infra-display` service running `tools/tft_status.py`, which
+draws a live health panel on an **Adafruit Mini PiTFT 1.14" (240×135, ST7789)**:
+
+- **LIVE** page — OK/STALE state, seconds since the last sample, live RMS level, the
+  dominant tone (short FFT of the live buffer), and uptime.
+- **SYSTEM** page — today's data (MB), total archive size, CPU temp, last publish, and
+  free-disk bar.
+
+The **top button (GPIO23)** cycles pages; the **bottom button (GPIO24)** toggles the
+backlight. `setup.sh --display` also enables SPI and adds you to the `spi`/`gpio` groups
+(hence the reboot). It's deliberately light — it reads the daemon's `live.npz` and
+`/proc`, and does **not** import obspy, so it barely competes with acquisition. Preview
+the layout on any machine without the hardware:
+
+```bash
+python tools/tft_status.py --snapshot preview.png          # LIVE page
+python tools/tft_status.py --snapshot sys.png --page 1     # SYSTEM page
+```
+
+### `--backup <DEST>` — protect the irreplaceable baseline
+
+The archive is your one-of-a-kind "before" record and **SD cards fail**. `--backup`
+installs a nightly `rsync` (04:30) of the archive to any destination — a mounted USB
+disk (`/mnt/usb/infra-backup`) or an ssh target (`user@nas:/path`). It never uses
+`--delete`, so it only adds/updates. Run one on demand with
+`sudo systemctl start infra-backup`. Also prefer a **high-endurance** SD card for the
+24/7 write load.
+
 Pi specifics:
 - **Serial port:** the INFRA20's USB adapter is usually `/dev/ttyUSB0`
   (`ls /dev/ttyUSB* /dev/ttyACM*` to find it). Put it in `config.toml`.
-- **First install is slow** — scipy/obspy fetch large ARM wheels (piwheels). Use 64-bit
-  Pi OS and a Pi 4/5 for a smoother time.
-- **Headless = no live window.** `tools/live.py` opens a GUI, so on a headless Pi use
-  `python tools/live.py --snapshot live.png` or the network dashboard. Analysis tools all
-  run headless.
-- Reboot once after the first setup so the `dialout` group fully applies.
+- **First install is slow** — even from piwheels, scipy/obspy are large ARM wheels.
+- **Storage:** the INFRA20 writes only ~10 MB/day (~3.5 GB/year), so a 16 GB card holds
+  a couple of years after the OS + venv; plan to grow the card or prune before it fills.
+- **Headless = no live window.** `tools/live.py` opens a GUI; on a headless Pi use
+  `tools/live.py --snapshot live.png`, the TFT panel, or the web dashboard. Analysis
+  tools all run headless.
+- Reboot once after the first setup so the `dialout`/`spi`/`gpio` groups fully apply.
 
 ## Notes
 

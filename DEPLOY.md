@@ -189,6 +189,37 @@ disk (`/mnt/usb/infra-backup`) or an ssh target (`user@nas:/path`). It never use
 `sudo systemctl start infra-backup`. Also prefer a **high-endurance** SD card for the
 24/7 write load.
 
+### Test the Pi before you move the sensor (avoid a data gap)
+
+There's one sensor and the serial port is exclusive, so you can't read the real stream
+on the Pi while it's still on the PC. But you can validate everything else first with a
+**simulated** stream, so the only unavoidable gap is the ~1-minute physical USB swap.
+
+`tools/sim_infra20.py` creates a virtual serial port and feeds synthetic INFRA20 lines
+(a tone + noise). Point the daemon at it — into a **scratch archive**, so the simulated
+data never touches your real baseline:
+
+```bash
+# terminal 1 -- fake sensor; note the /dev/pts/N it prints
+.venv/bin/python tools/sim_infra20.py
+
+# terminal 2 -- acquire from it into a throwaway dir
+.venv/bin/python -m infrasound_monitor.acquire /dev/pts/N /tmp/testarch --live-file /tmp/live.npz
+```
+
+Let it run a minute, then Ctrl-C. That exercises the full path — miniSEED writing, the
+rolling `live.npz`, gap handling. With both running, the **PiTFT LIVE page** should show
+`OK`, a ~3 Hz tone and a level, which also confirms the panel, SPI, wiring and buttons.
+To rehearse the analysis + publish path, `scp` a few days of real archive from the PC and
+run `tools/report.py` / `tools/dashboard.py` against it. Then `.venv/bin/python tools/doctor.py`
+for the overall check (its serial-port test is the only thing that should fail until the
+real sensor is attached). Delete `/tmp/testarch` when done.
+
+**The cutover** (single, short gap): stop the PC daemon (`Stop-ScheduledTask InfraAcquire`),
+unplug the USB adapter from the PC, plug it into the Pi, confirm the port
+(`ls /dev/ttyUSB*`), set it in `config.toml`, then `sudo systemctl start infra-acquire`.
+The daemon records the brief handover as an explicit gap.
+
 Pi specifics:
 - **Serial port:** the INFRA20's USB adapter is usually `/dev/ttyUSB0`
   (`ls /dev/ttyUSB* /dev/ttyACM*` to find it). Put it in `config.toml`.

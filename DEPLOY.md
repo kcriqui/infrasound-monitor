@@ -66,6 +66,33 @@ so it works in ObsPy, Swarm, and the FDSN toolchain. Manage the daemon with
 `Start-ScheduledTask` / `Stop-ScheduledTask -TaskName InfraAcquire`; its log is
 `deploy\acquire.log`. Only one program can hold the port, so keep AmaSeis closed.
 
+### Surviving reboots (unattended operation)
+
+`InfraAcquire` runs **at logon**, not at boot — so after a power-up or a reboot (a
+Windows Update, a power blip), acquisition does **not** resume until someone signs in,
+leaving a gap in the archive. (If your archive is on a login-mounted drive such as
+Google Drive, that's a second reason a pre-login task can't write.) For a truly
+unattended monitor, enable **auto-login** so the machine boots straight to the desktop
+and the task fires on its own:
+
+1. `Win+R` → `netplwiz` → uncheck **"Users must enter a user name and password to use
+   this computer"** → Apply → enter the account password (leave blank if the account has
+   none) → OK.
+2. If that checkbox is missing, Windows Hello "Hello-only sign-in" is hiding it. Clear it
+   in **Settings → Accounts → Sign-in options** (toggle off "only allow Windows Hello
+   sign-in…"), or — if that toggle isn't shown (e.g. a local account) — from an
+   **elevated** PowerShell:
+   ```powershell
+   Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device' -Name DevicePasswordLessBuildVersion -Value 0
+   ```
+   then redo step 1.
+
+**Security tradeoff:** anyone who powers the machine on lands at your desktop with full
+access. Fine for a dedicated home sensor PC; not for a shared or sensitive machine. A
+**Raspberry Pi** (below) avoids this entirely — its systemd service starts at boot with
+no login and no auto-login compromise. Note also that if you later set/change the
+account password, auto-login silently breaks and step 1 must be redone.
+
 ## 5. Analyze
 
 All tools take an archive path (defaults to your configured `archive`) and a date range:

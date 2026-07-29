@@ -6,7 +6,8 @@
 #   bash deploy/setup.sh --display                    # + Mini PiTFT status display service
 #   bash deploy/setup.sh --swap                       # bump swap to 2 GB (recommended on a 1 GB Pi)
 #   bash deploy/setup.sh --backup <DEST>              # + nightly archive backup (rsync to DEST)
-#   bash deploy/setup.sh --dashboard --display --swap --backup user@nas:/infra   # the full Pi build
+#   bash deploy/setup.sh --status                     # + lightweight status web page (port 8080)
+#   bash deploy/setup.sh --dashboard --display --swap --status --backup user@nas:/infra  # full Pi build
 #
 # Installs into a project-local virtualenv (.venv), creates config.toml, adds you to the
 # 'dialout' group for serial access, and installs systemd units that run at boot and restart
@@ -17,12 +18,13 @@ DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$DEPLOY_DIR")"
 cd "$ROOT"
 
-DASH=0; DISPLAY_TFT=0; SWAP=0; BACKUP_DEST=""
+DASH=0; DISPLAY_TFT=0; SWAP=0; STATUS=0; BACKUP_DEST=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dashboard) DASH=1 ;;
         --display)   DISPLAY_TFT=1 ;;
         --swap)      SWAP=1 ;;
+        --status)    STATUS=1 ;;
         --backup)    shift; BACKUP_DEST="${1:-}"
                      [ -n "$BACKUP_DEST" ] || { echo "ERROR: --backup needs a destination"; exit 1; } ;;
         *) echo "unknown option: $1"; exit 1 ;;
@@ -128,6 +130,15 @@ if [ "$DISPLAY_TFT" = 1 ]; then
     echo "  (if the panel stays blank, reboot so SPI + the spi/gpio groups take effect)"
 fi
 
+# 7b. Optional status web page
+if [ "$STATUS" = 1 ]; then
+    echo "  installing status web page service 'infra-status' (port 8080) ..."
+    render deploy/infra-status.service | sudo tee /etc/systemd/system/infra-status.service >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now infra-status.service
+    echo "  reachable at http://<this-host>:8080 from your private network (no auth -- keep it off the internet)"
+fi
+
 # 8. Optional nightly archive backup
 if [ -n "$BACKUP_DEST" ]; then
     echo "  installing nightly archive backup -> $BACKUP_DEST"
@@ -144,5 +155,6 @@ echo "Done. Useful commands:"
 echo "  systemctl status infra-acquire         # is acquisition running?"
 echo "  journalctl -u infra-acquire -f         # live acquisition log"
 [ "$DISPLAY_TFT" = 1 ] && echo "  journalctl -u infra-display -f         # display log"
+[ "$STATUS" = 1 ] && echo "  http://<this-host>:8080                # live status web page"
 [ -n "$BACKUP_DEST" ] && echo "  systemctl start infra-backup           # run a backup now"
 echo "  .venv/bin/python tools/doctor.py       # verify the whole setup"

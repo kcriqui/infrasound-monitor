@@ -134,7 +134,7 @@ cd infrasound-monitor
 cp config.example.toml config.toml       # edit: port = "/dev/ttyUSB0", coordinates, sample_rate
 
 # Full build: acquisition + daily dashboard + Mini PiTFT display + swap + nightly backup
-bash deploy/setup.sh --dashboard --display --swap --backup user@nas:/infra-backup
+bash deploy/setup.sh --dashboard --display --swap --status --backup user@nas:/infra-backup
 
 sudo systemctl start infra-acquire       # start after editing a freshly-created config
 sudo reboot                              # once, so dialout/spi/gpio groups + SPI apply
@@ -179,6 +179,23 @@ the layout on any machine without the hardware:
 python tools/tft_status.py --snapshot preview.png          # LIVE page
 python tools/tft_status.py --snapshot sys.png --page 1     # SYSTEM page
 ```
+
+### `--status` — live status web page
+
+`--status` installs the `infra-status` service running `tools/statusd.py`, a tiny
+stdlib web server (no extra dependencies) that serves a live status page so you can
+check the monitor from a browser instead of SSHing in. It reuses the same cheap
+collectors as the display (last-sample age, level, dominant tone, uptime, today's data,
+archive size, disk free, CPU temp, last publish, and a live waveform). Endpoints:
+
+- `/` — an auto-refreshing HTML status page
+- `/status.json` — the same data as JSON (for scripts or other dashboards)
+- `/healthz` — `ok`/200 for uptime checks
+
+It serves on **port 8080** and has **no authentication**, so reach it only from a
+private network — your LAN or a VPN — and never port-forward it to the public internet.
+On the same LAN that's `http://<pi-ip>:8080`; remotely, put the Pi on a private VPN and
+use its VPN address. Change the port with `tools/statusd.py --port <n>` if 8080 clashes.
 
 ### `--backup <DEST>` — protect the irreplaceable baseline
 

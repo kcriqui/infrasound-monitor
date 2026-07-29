@@ -223,6 +223,7 @@ src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-wate
 tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dashboard.py ·
                  transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py ·
                  tft_status.py (Raspberry Pi Mini PiTFT status display) ·
+                 statusd.py (lightweight live-status web page) ·
                  sim_infra20.py (synthetic serial source for hardware-free testing)
 deploy/          Windows: setup.ps1 / acquire-daemon.ps1 / publish.ps1
                  Linux:   setup.sh (--dashboard/--display/--swap/--backup) + backup.sh

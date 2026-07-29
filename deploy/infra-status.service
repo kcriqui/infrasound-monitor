@@ -1,0 +1,18 @@
+# systemd unit template for the lightweight status web page (tools/statusd.py).
+# deploy/setup.sh --status substitutes __USER__ / __PROJECT__ / __PYTHON__ and installs it.
+# Serves on port 8080 by default. It has NO authentication -- reach it only from a private
+# network (home LAN or a VPN); do NOT port-forward it to the public internet.
+[Unit]
+Description=INFRA20 status web page
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT__
+ExecStart=__PYTHON__ tools/statusd.py --port 8080
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

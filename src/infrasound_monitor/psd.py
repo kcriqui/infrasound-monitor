@@ -119,6 +119,10 @@ def update_grid(cache, archive, cfg: StationConfig = DEFAULT_STATION,
 
 
 def save_grid(grid: dict, path):
+    # Ensure the parent dir exists (e.g. a fresh clone has no analysis/ -- it's gitignored).
+    parent = Path(path).parent
+    if parent and not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(path, **grid)
 
 

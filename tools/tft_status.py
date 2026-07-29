@@ -7,17 +7,19 @@ it reads the daemon's rolling ``live.npz`` (last-sample age, live RMS level, and
 dominant tone from a short FFT) plus ``/proc``, ``shutil.disk_usage`` and file mtimes.
 It does NOT import obspy, so it barely competes with acquisition on a 1 GB Pi 3B.
 
-Pages (top button = cycle, bottom button = backlight on/off):
-  LIVE    - alive?/stale, seconds since last sample, RMS level bar, dominant tone, uptime
+Pages (top button = next, bottom button = previous):
+  STATUS  - alive?/stale, seconds since last sample, RMS level bar, dominant tone, uptime
   SYSTEM  - today's data (MB), archive total, CPU temp, last publish, disk-free bar
+  WAVE    - live waveform of the data being collected (last ~12 s, auto-scaled)
 
 Buttons on the Mini PiTFT are GPIO23 (top) and GPIO24 (bottom), active-low.
 
 Run headless as a service (deploy/infra-display.service). To preview the layout on
 any machine (no Pi hardware needed):
 
-    python tools/tft_status.py --snapshot preview.png          # LIVE page
-    python tools/tft_status.py --snapshot sys.png --page 1     # SYSTEM page
+    python tools/tft_status.py --snapshot preview.png          # STATUS page
+    python tools/tft_status.py --snapshot sys.png  --page 1    # SYSTEM page
+    python tools/tft_status.py --snapshot wave.png --page 2    # WAVE page
 """
 from __future__ import annotations
 import argparse
@@ -59,6 +61,7 @@ BARBG  = (36, 40, 48)
 
 STALE_S = 15.0                # no fresh live.npz for this long -> STALE
 LEVEL_FULLSCALE_PA = 0.5      # RMS level bar full scale (typical indoor ambient)
+WAVE_SECONDS = 12.0           # window shown on the live WAVE page
 
 
 def _font(size, bold=False):
@@ -81,7 +84,7 @@ F_LG = _font(30, bold=True)
 def read_live():
     """Health from the daemon's rolling live buffer -- cheap, no obspy."""
     out = {"present": False, "age_s": None, "last_local": None,
-           "rms_pa": None, "dom_hz": None}
+           "rms_pa": None, "dom_hz": None, "wave": None, "wave_s": None}
     p = Path(LIVE_FILE)
     try:
         out["age_s"] = time.time() - p.stat().st_mtime      # freshness = file mtime
@@ -106,6 +109,11 @@ def read_live():
         y = y - y.mean()
         pa = y * PA_PER_COUNT
         out["rms_pa"] = float(np.sqrt(np.mean(pa ** 2)))
+        wn = int(min(y.size, WAVE_SECONDS * fs))
+        if wn >= 2:
+            w = pa[-wn:]
+            out["wave"] = w - w.mean()
+            out["wave_s"] = wn / fs
         if y.size >= 128:
             win = np.hanning(y.size)
             mag = np.abs(np.fft.rfft(y * win))
@@ -218,7 +226,7 @@ def _header(draw, title):
 
 
 def page_live(draw, m):
-    _header(draw, "LIVE")
+    _header(draw, "STATUS")
     live = m["live"]
     ok = live["present"] and live["age_s"] is not None and live["age_s"] < STALE_S
     color = OK if ok else BAD
@@ -263,7 +271,29 @@ def page_system(draw, m):
         draw.text((WIDTH - 6, 118), f"{df:.0f}%", font=F_SM, fill=col, anchor="ra")
 
 
-PAGES = [page_live, page_system]
+def page_wave(draw, m):
+    _header(draw, "WAVE")
+    live = m["live"]
+    x0, y0, x1, y1 = 6, 26, WIDTH - 6, 114
+    draw.rectangle([x0, y0, x1, y1], outline=RULE)
+    ymid = (y0 + y1) // 2
+    wave = live.get("wave")
+    if wave is None or len(wave) < 2:
+        draw.text(((x0 + x1) // 2, ymid), "waiting for data", font=F_SM, fill=DIM, anchor="mm")
+        return
+    draw.line([x0, ymid, x1, ymid], fill=(30, 34, 42))          # zero baseline
+    n = len(wave)
+    amp = float(np.max(np.abs(wave))) or 1e-6                    # symmetric auto-scale
+    half = (y1 - y0) / 2 - 2
+    w = x1 - x0
+    pts = [(x0 + int(i * w / (n - 1)), ymid - int(float(wave[i]) / amp * half))
+           for i in range(n)]
+    draw.line(pts, fill=ACCENT)
+    draw.text((x0 + 2, y1 + 3), f"{live.get('wave_s', 0):.0f}s", font=F_SM, fill=DIM)
+    draw.text((x1 - 2, y1 + 3), f"±{amp:.2f} Pa", font=F_SM, fill=DIM, anchor="ra")
+
+
+PAGES = [page_live, page_system, page_wave]
 
 
 def gather(cache, site_index, force_slow=False):
@@ -304,7 +334,7 @@ def main():
     p.add_argument("--interval", type=float, default=2.0, help="refresh seconds (default 2)")
     p.add_argument("--rotation", type=int, default=90, choices=[90, 270],
                    help="panel rotation; 270 if mounted upside down (default 90)")
-    p.add_argument("--page", type=int, default=0, help="starting page (0=LIVE, 1=SYSTEM)")
+    p.add_argument("--page", type=int, default=0, help="starting page (0=STATUS, 1=SYSTEM, 2=WAVE)")
     p.add_argument("--site-index", default=str(Path(PROJECT_ROOT) / "site" / "index.html"),
                    help="published index.html whose mtime is the 'last publish' time")
     p.add_argument("--snapshot", metavar="PNG",
@@ -327,18 +357,23 @@ def main():
                  f"(pip install -e '.[display]') and SPI enabled. "
                  f"Use --snapshot to preview the layout on any machine.")
 
-    page, bl_on, a_prev, b_prev = a.page, True, True, True
+    # Poll the buttons at ~20 Hz so presses feel responsive, but only redraw (and re-read
+    # live.npz) every --interval or immediately when the page changes.
+    page, a_prev, b_prev, last_draw = a.page, True, True, 0.0
     try:
         while True:
-            disp.image(build_image(page, gather(cache, a.site_index)), a.rotation)
+            now = time.monotonic()
+            redraw = now - last_draw >= a.interval
             av, bv = btn_a.value, btn_b.value          # active-low: pressed == False
-            if a_prev and not av:
-                page = (page + 1) % len(PAGES)
-            if b_prev and not bv:
-                bl_on = not bl_on
-                backlight.value = bl_on
+            if a_prev and not av:                      # top button -> next page
+                page = (page + 1) % len(PAGES); redraw = True
+            if b_prev and not bv:                      # bottom button -> previous page
+                page = (page - 1) % len(PAGES); redraw = True
             a_prev, b_prev = av, bv
-            time.sleep(a.interval)
+            if redraw:
+                disp.image(build_image(page, gather(cache, a.site_index)), a.rotation)
+                last_draw = now
+            time.sleep(0.05)
     except KeyboardInterrupt:
         backlight.value = False
 

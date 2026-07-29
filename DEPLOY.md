@@ -189,6 +189,24 @@ disk (`/mnt/usb/infra-backup`) or an ssh target (`user@nas:/path`). It never use
 `sudo systemctl start infra-backup`. Also prefer a **high-endurance** SD card for the
 24/7 write load.
 
+**Preparing a USB drive as the target.** Identify it with `lsblk -f`, then — if it's
+empty/expendable — format it ext4 and auto-mount it at `/mnt/usb` (assuming the stick is
+`/dev/sda1`):
+
+```bash
+sudo wipefs -a /dev/sda1 && sudo mkfs.ext4 -L INFRABACKUP /dev/sda1
+sudo mkdir -p /mnt/usb
+sudo blkid /dev/sda1                          # note the new UUID
+# add to /etc/fstab (nofail lets the Pi boot even if the drive is absent):
+echo "UUID=<uuid>  /mnt/usb  ext4  defaults,nofail,noatime  0  2" | sudo tee -a /etc/fstab
+sudo mount -a && sudo chown "$USER":"$USER" /mnt/usb
+```
+
+Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already installed,
+`sudo systemctl start infra-backup` to test). Confirm the nightly schedule with
+`systemctl list-timers 'infra-*'`. Size the drive for your retention — the archive grows
+~3.5 GB/year, so a 4 GB stick holds roughly a year.
+
 ### Test the Pi before you move the sensor (avoid a data gap)
 
 There's one sensor and the serial port is exclusive, so you can't read the real stream

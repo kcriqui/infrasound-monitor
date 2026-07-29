@@ -28,6 +28,13 @@ export GIT_COMMITTER_NAME="infra-pi" GIT_COMMITTER_EMAIL="infra-pi@localhost"
 ts() { date -Is; }
 echo "$(ts)  [publish] rebuilding dashboard ..." >> "$LOG"
 "$VENV_PY" tools/refresh.py "$ARCHIVE" --cache "$CACHE" --out-dir "$SITE_DIR" >> "$LOG" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    # A killed/failed rebuild must NOT push -- that would republish stale content and
+    # falsely report success. rc 137 = OOM-killed (SIGKILL); give more swap / RAM.
+    echo "$(ts)  [publish] rebuild FAILED (refresh.py exit $rc$([ "$rc" = 137 ] && echo ' = OOM-killed')) -- not pushing" >> "$LOG"
+    exit 1
+fi
 
 if [ -d "$SITE_DIR/.git" ]; then
     cd "$SITE_DIR"

@@ -87,8 +87,17 @@ if [ "$SWAP" = 1 ]; then
         sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
         sudo dphys-swapfile setup
         sudo dphys-swapfile swapon
+    elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -q '/swapfile'; then
+        # Newer Raspberry Pi OS (Trixie) has no dphys-swapfile -- create a plain /swapfile.
+        # zram alone isn't enough headroom for the full-range dashboard render on a 1 GB Pi.
+        echo "  creating a 2 GB /swapfile (no dphys-swapfile on this OS) ..."
+        sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
     else
-        echo "  (dphys-swapfile not found -- skipping; install it or configure zram manually)"
+        echo "  /swapfile already present -- leaving swap as is"
     fi
 fi
 

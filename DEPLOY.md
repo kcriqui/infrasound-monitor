@@ -207,6 +207,51 @@ Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already insta
 `systemctl list-timers 'infra-*'`. Size the drive for your retention — the archive grows
 ~3.5 GB/year, so a 4 GB stick holds roughly a year.
 
+### Publishing the dashboard to GitHub Pages
+
+The `--dashboard` timer runs `deploy/publish.sh`, which rebuilds the dashboard into
+`site/` and, when `site/` is a git clone of your Pages repo, force-pushes a single amended
+commit (so the published repo never accumulates history). Wire the push target up once,
+with a **deploy key** scoped to just the site repo — no account-wide token:
+
+1. Generate a key on the Pi (no passphrase, so the service can push unattended):
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/infra_site -N "" -C "infra-pi-site"
+   cat ~/.ssh/infra_site.pub
+   ```
+2. On GitHub, add that **public** key to the *site* repo → Settings → Deploy keys → Add
+   deploy key → paste it → tick **Allow write access**.
+3. Point SSH at that key for this repo (append to `~/.ssh/config`):
+   ```
+   Host github-infra-site
+     HostName github.com
+     User git
+     IdentityFile ~/.ssh/infra_site
+     IdentitiesOnly yes
+   ```
+4. Clone the Pages repo into `site/` via that alias — do it once interactively so GitHub's
+   host key gets trusted (needed for the unattended pushes later):
+   ```bash
+   rm -rf site        # drop any local-only build first
+   git clone git@github-infra-site:<you>/<site-repo>.git site
+   ```
+5. Test the pipeline:
+   ```bash
+   bash deploy/publish.sh
+   tail deploy/publish.log        # expect a "[publish] pushed" line
+   ```
+
+Re-run `setup.sh --dashboard` if you installed the dashboard service before this change
+(it now runs `publish.sh`, not `refresh.py`). Pre-cutover the dashboard has little data;
+once the sensor is on the Pi, build the PSD grid cache once
+(`.venv/bin/python tools/waterfall.py archive --start <date> --end <date> --cache
+analysis/grid_full.npz`) and the nightly run keeps it current.
+
+> **Avoid duelling publishers:** if another machine (e.g. the old Windows box) also
+> force-pushes to the same Pages repo, disable it once the Pi is publishing
+> (`Disable-ScheduledTask -TaskName InfraDashboard` on Windows) — otherwise the two
+> overwrite each other and the site flip-flops between fresh and stale data.
+
 ### Test the Pi before you move the sensor (avoid a data gap)
 
 There's one sensor and the serial port is exclusive, so you can't read the real stream

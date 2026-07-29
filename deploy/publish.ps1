@@ -4,7 +4,7 @@
 # a remote) commits and force-pushes so a static host — e.g. GitHub Pages — updates.
 #
 # Prerequisite: the PSD grid cache must exist once. Build it with:
-#   python tools\waterfall.py <archive> --start <YYYY-MM-DD> --end <YYYY-MM-DD> --cache analysis\grid_full.npz
+#   python -m infrasound_monitor.waterfall <archive> --start <YYYY-MM-DD> --end <YYYY-MM-DD> --cache analysis\grid_full.npz
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root

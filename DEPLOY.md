@@ -98,7 +98,7 @@ account password, auto-login silently breaks and step 1 must be redone.
 All tools take an archive path (defaults to your configured `archive`) and a date range:
 
 ```powershell
-python tools\waterfall.py archive --start 2026-01-01 --end 2026-02-01 --out waterfall.html --cache analysis\grid_full.npz
+python -m infrasound_monitor.waterfall archive --start 2026-01-01 --end 2026-02-01 --out waterfall.html --cache analysis\grid_full.npz
 python tools\analyze.py   archive --start 2026-01-01 --end 2026-02-01                       # PPSD + dayplot
 python tools\tonehunt.py  archive --start 2026-01-01 --end 2026-02-01 --cache analysis\grid_full.npz --night
 python tools\report.py    archive --start 2026-01-01 --end 2026-02-01 --cache analysis\grid_full.npz   # station report
@@ -244,7 +244,7 @@ with a **deploy key** scoped to just the site repo — no account-wide token:
 Re-run `setup.sh --dashboard` if you installed the dashboard service before this change
 (it now runs `publish.sh`, not `refresh.py`). Pre-cutover the dashboard has little data;
 once the sensor is on the Pi, build the PSD grid cache once
-(`.venv/bin/python tools/waterfall.py archive --start <date> --end <date> --cache
+(`.venv/bin/infra-waterfall archive --start <date> --end <date> --cache
 analysis/grid_full.npz`) and the nightly run keeps it current.
 
 > **Avoid duelling publishers:** if another machine (e.g. the old Windows box) also

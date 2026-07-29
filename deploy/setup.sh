@@ -38,6 +38,20 @@ python3 -c 'import sys; assert sys.version_info >= (3,10), sys.version' \
     || { echo "ERROR: need Python 3.10+"; exit 1; }
 echo "  Python: $(python3 --version)"
 
+# 1b. Build prerequisites (Debian/Raspberry Pi OS). --display pulls adafruit-blinka, whose
+#     RPi.GPIO / rpi_ws281x deps sometimes have no prebuilt wheel and compile from source --
+#     that needs the Python headers (Python.h from python3-dev) and a C toolchain.
+if [ "$DISPLAY_TFT" = 1 ] && command -v apt-get >/dev/null; then
+    need=""
+    dpkg -s python3-dev    >/dev/null 2>&1 || need="$need python3-dev"
+    dpkg -s build-essential >/dev/null 2>&1 || need="$need build-essential"
+    if [ -n "$need" ]; then
+        echo "  installing build prerequisites:$need"
+        sudo apt-get update -qq
+        sudo apt-get install -y $need
+    fi
+fi
+
 # 2. Virtualenv + editable install (Raspberry Pi OS is PEP-668 'externally managed', so a
 #    venv is required; ARM wheels for numpy/scipy/obspy come from piwheels automatically)
 [ -d .venv ] || { echo "  creating virtualenv .venv ..."; python3 -m venv .venv; }

@@ -70,6 +70,15 @@ frequency, PSD in dB (Pa²/Hz). `--cache` stores the hourly PSD grid so re-rende
 instant. This is the display for **before/after comparison** (e.g. a datacenter appearing
 as a new persistent horizontal line).
 
+Drag on the plot to zoom into a date range, use the **range slider** under the x axis to
+scroll along a long record, and double-click to reset. So that the page stays openable as
+the archive grows, the time axis is capped at `--max-cols` columns (default 3000 ≈ 4
+months hourly); beyond that, consecutive hours are median-combined into wider bins — a
+median in power, so a single transient can't brighten a whole bin while a persistent tone
+survives. `--max-cols 0` keeps hourly resolution at any length, at the cost of a page that
+grows without bound (~78 MB and ~1.3 GB peak RAM to render 3 years, vs ~13 MB and ~220 MB
+capped).
+
 ![example waterfall](docs/waterfall_example.png)
 
 The diurnal (day/night) cycle shows as vertical banding; data gaps are blank columns; a

@@ -177,6 +177,31 @@ class AcquisitionStalled(RuntimeError):
     """No samples arrived for too long -- exit so systemd restarts us cleanly."""
 
 
+def _catch_sigterm():
+    """Make SIGTERM unwind through ``finally`` so buffered samples get written.
+
+    systemd sends SIGTERM on stop/restart/shutdown, and Python's default
+    disposition for it kills the process outright -- ``finally`` blocks and
+    ``atexit`` hooks never run.  Since :class:`SdsWriter` only appends to the day
+    file every ``flush_seconds`` (300 s by default), that silently discarded up
+    to five minutes of already-acquired samples on every stop, including the
+    watchdog's own unattended restarts.
+
+    Re-raising as KeyboardInterrupt reuses the path Ctrl-C already takes, so the
+    writer flushes and the record just ends where it should.  Returns whether the
+    handler was installed; it is not, in a non-main thread, where signal() raises.
+    """
+    import signal
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+    try:
+        signal.signal(signal.SIGTERM, _stop)
+        return True
+    except (ValueError, OSError, AttributeError):
+        return False
+
+
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
         fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 15.0,
         gap_tol: float = 2.0, reconnect_delay: float = 5.0,
@@ -203,6 +228,7 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
     import serial
     from collections import deque
 
+    _catch_sigterm()                    # so a systemd stop flushes instead of dropping
     writer = SdsWriter(archive, cfg, fs=fs, flush_seconds=flush_seconds, gap_tol=gap_tol)
     live = deque(maxlen=int(live_seconds * fs)) if live_file else None
     last_live = 0.0

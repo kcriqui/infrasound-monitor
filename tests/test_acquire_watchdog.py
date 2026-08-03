@@ -76,6 +76,54 @@ def test_repeated_open_failures_give_up(tmp_path, monkeypatch):
             max_reconnects=3, live_file=None)
 
 
+def test_sigterm_handler_raises_the_exception_run_unwinds_on():
+    """Platform-independent half of the check below: the installed handler must
+    raise KeyboardInterrupt, the one exception run() flushes on."""
+    import signal
+    from infrasound_monitor.acquire import _catch_sigterm
+
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        assert _catch_sigterm() is True
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGTERM, None)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_sigterm_flushes_buffered_samples_instead_of_dropping_them(tmp_path, monkeypatch):
+    """systemd stops the daemon with SIGTERM, whose default disposition kills the
+    process outright -- `finally: writer.flush()` never runs and everything since
+    the last flush (up to flush_seconds, 300 s) is silently lost."""
+    import os
+    import signal
+
+    if not hasattr(signal, "SIGTERM") or os.name != "posix":
+        pytest.skip("POSIX signal delivery required")
+
+    counts = iter([b"%d\r\n" % v for v in range(500)])
+
+    class _FeedThenSigterm(_SilentPort):
+        def readline(self):
+            try:
+                return next(counts)
+            except StopIteration:
+                os.kill(os.getpid(), signal.SIGTERM)   # as systemd would
+                return b"0\r\n"
+
+    _install_fake_serial(monkeypatch, _FeedThenSigterm)
+    # flush_seconds far larger than the run, so nothing flushes on its own:
+    # anything on disk afterwards can only have come from the shutdown path.
+    run("/dev/fake", tmp_path, warmup=0, flush_seconds=1e6, stall_timeout=0,
+        live_file=None)
+
+    written = list(tmp_path.rglob("*.SDF.D.*"))
+    assert written, "SIGTERM dropped the buffer -- nothing reached the day file"
+    assert written[0].stat().st_size > 0
+
+
 def test_watchdogs_can_be_disabled(tmp_path, monkeypatch):
     """0 restores the old spin-forever behaviour; prove it does not raise early."""
     calls = {"n": 0}

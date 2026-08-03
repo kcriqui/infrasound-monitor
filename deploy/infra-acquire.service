@@ -13,6 +13,11 @@ WorkingDirectory=__PROJECT__
 ExecStart=__PYTHON__ -m infrasound_monitor.acquire
 Restart=always
 RestartSec=15
+# The daemon buffers up to flush_seconds of samples, so it must be allowed to
+# unwind and write them out rather than being killed where it stands. It traps
+# SIGTERM itself; SIGINT is belt-and-braces, taking the same path as Ctrl-C.
+KillSignal=SIGINT
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

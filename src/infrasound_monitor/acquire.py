@@ -178,7 +178,7 @@ class AcquisitionStalled(RuntimeError):
 
 
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
-        fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 2.0,
+        fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 15.0,
         gap_tol: float = 2.0, reconnect_delay: float = 5.0,
         live_file=None, live_seconds: float = 600.0,
         stall_timeout: float = 120.0, max_reconnects: int = 20):
@@ -214,7 +214,8 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
         while True:
             try:
                 with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1,
-                                   timeout=1) as ser:
+                                   timeout=1, rtscts=False, dsrdtr=False) as ser:
+                    _assert_power_lines(ser)
                     _discard_warmup(ser, warmup)
                     fails = 0
                     last_sample = time.time()
@@ -255,8 +256,37 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
         print("stopped, buffer flushed", flush=True)
 
 
+def _assert_power_lines(ser):
+    """Drive DTR and RTS high -- on this rig they are the sensor's power supply.
+
+    Infiltec ships the INFRA20 with a USB-serial adapter chosen because its
+    handshake lines source enough current to run the sensor parasitically (DTR =
+    DB9 pin 4, RTS = pin 7, against GND pin 5).  pyserial happens to assert both
+    on open, so this has always worked by default -- but relying on that default
+    means a different adapter or driver could leave the sensor unpowered with no
+    obvious symptom beyond silence.  State it explicitly instead.
+
+    Also why ``rtscts``/``dsrdtr`` are off at open: hardware flow control would
+    hand these lines to the driver to toggle, i.e. cut power mid-stream.
+    """
+    for attr in ("dtr", "rts"):
+        try:
+            setattr(ser, attr, True)
+        except (OSError, ValueError) as e:        # some adapters expose neither
+            print(f"warning: could not assert {attr.upper()} ({e}); if the sensor "
+                  f"is powered from that line it will stay silent", flush=True)
+
+
 def _discard_warmup(ser, seconds: float):
-    """Read and drop the connect transient (garbage line + filter settling)."""
+    """Read and drop the connect transient (garbage line + filter settling).
+
+    Every open is a *cold* start: closing the port drops DTR/RTS, which removes
+    power from the sensor, so a reconnect power-cycles it rather than merely
+    reattaching.  The INFRA20's 0.05 Hz high-pass corner implies a time constant
+    of ~3.2 s, so allow ~5 of those to settle before trusting samples -- else the
+    first data after an automatic restart is a decaying transient rather than an
+    honest gap.
+    """
     if seconds <= 0:
         return
     end = time.time() + seconds
@@ -267,7 +297,10 @@ def _discard_warmup(ser, seconds: float):
 def sniff(port: str, baud: int = 9600, seconds: float = 5.0) -> None:
     """Print raw lines from the port so the framing can be eyeballed."""
     import serial
-    with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1, timeout=1) as ser:
+    with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1, timeout=1,
+                       rtscts=False, dsrdtr=False) as ser:
+        _assert_power_lines(ser)          # sniff must power the sensor too, or a
+                                          # perfectly good adapter looks dead here
         end = time.time() + seconds
         while time.time() < end:
             print(repr(ser.readline()))
@@ -284,8 +317,10 @@ def main(argv=None):
                    help="sample rate written to the miniSEED headers (sps)")
     p.add_argument("--flush-seconds", type=float, default=300.0,
                    help="append a segment to the day file at least this often")
-    p.add_argument("--warmup", type=float, default=2.0,
-                   help="seconds of post-open data to discard (connect transient)")
+    p.add_argument("--warmup", type=float, default=15.0,
+                   help="seconds of post-open data to discard; closing the port drops "
+                        "DTR/RTS and so unpowers the sensor, making every open a cold "
+                        "start that must settle before its samples mean anything")
     p.add_argument("--gap-tol", type=float, default=2.0,
                    help="a sample this many seconds late ends the run (explicit gap)")
     p.add_argument("--live-file", default=None,

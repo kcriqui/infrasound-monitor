@@ -333,6 +333,18 @@ sudo systemctl start infra-acquire
 Numbers scrolling means the sensor is fine. Nothing at all means power-cycle the INFRA20
 and replug the adapter; `sudo dmesg | grep -i usb | tail -30` will show a bus-level drop.
 
+> **The adapter may also be powering the sensor.** Infiltec ships the INFRA20 with a
+> USB-serial adapter chosen because its handshake lines source enough current to run the
+> sensor parasitically (DTR = DB9 pin 4, RTS = pin 7, against GND pin 5). So a replacement
+> is *not* a drop-in: what matters is true RS-232 levels **and** handshake-line current,
+> not the chip brand. Most "FTDI" products sold today are **TTL-level** (3.3/5 V logic, no
+> level shifter) and will neither power nor talk to the sensor; even a genuine RS-232
+> adapter built on a bare MAX3232 may source too little current. Measure DTR/RTS on the
+> working adapter and match it. The daemon asserts both lines explicitly and disables
+> hardware flow control (which would otherwise let the driver toggle them, cutting power
+> mid-stream), and `--warmup` defaults to 15 s because closing the port unpowers the
+> sensor, so every reconnect is a cold start that has to settle.
+
 Pi specifics:
 - **Serial port:** the INFRA20's USB adapter is usually `/dev/ttyUSB0`
   (`ls /dev/ttyUSB* /dev/ttyACM*` to find it). Put it in `config.toml`.

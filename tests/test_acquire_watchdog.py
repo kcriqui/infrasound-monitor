@@ -26,8 +26,12 @@ def _install_fake_serial(monkeypatch, serial_cls):
 
 class _SilentPort:
     """Opens fine, then returns nothing -- a dead sensor behind a live adapter."""
+    opened = []
+
     def __init__(self, *a, **k):
-        pass
+        self.dtr = self.rts = False
+        self.kwargs = k
+        _SilentPort.opened.append(self)
 
     def __enter__(self):
         return self
@@ -37,6 +41,20 @@ class _SilentPort:
 
     def readline(self):
         return b""
+
+
+def test_dtr_and_rts_are_asserted_because_they_power_the_sensor(tmp_path, monkeypatch):
+    """The INFRA20 is powered parasitically off the handshake lines, so leaving
+    these to pyserial's default would make the sensor's power supply implicit."""
+    _SilentPort.opened.clear()
+    _install_fake_serial(monkeypatch, _SilentPort)
+    with pytest.raises(AcquisitionStalled):
+        run("/dev/fake", tmp_path, warmup=0, stall_timeout=0.3, live_file=None)
+    port = _SilentPort.opened[0]
+    assert port.dtr is True and port.rts is True
+    # hardware flow control would let the driver toggle those same lines
+    assert port.kwargs.get("rtscts") is False
+    assert port.kwargs.get("dsrdtr") is False
 
 
 class _UnopenablePort:

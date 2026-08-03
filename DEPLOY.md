@@ -190,7 +190,14 @@ archive size, disk free, CPU temp, last publish, and a live waveform). Endpoints
 
 - `/` — an auto-refreshing HTML status page
 - `/status.json` — the same data as JSON (for scripts or other dashboards)
-- `/healthz` — `ok`/200 for uptime checks
+- `/healthz` — `ok`/**200** while acquiring, **503** plus a one-line reason when not
+
+`/healthz` reflects *acquisition*, not merely "the web server is up", so pointing an
+uptime monitor at it will actually catch a stalled sensor. When something is wrong the
+page and `status.json` also carry a plain-language `diagnosis`, plus whether the serial
+port still exists, the `infra-acquire` unit's state, and its restart count — enough to
+tell "the USB adapter vanished" from "the port is open but the sensor went quiet"
+without SSHing in. Those are the two failures that look identical from the outside.
 
 It serves on **port 8080** and has **no authentication**, so reach it only from a
 private network — your LAN or a VPN — and never port-forward it to the public internet.
@@ -303,6 +310,28 @@ real sensor is attached). Delete `/tmp/testarch` when done.
 unplug the USB adapter from the PC, plug it into the Pi, confirm the port
 (`ls /dev/ttyUSB*`), set it in `config.toml`, then `sudo systemctl start infra-acquire`.
 The daemon records the brief handover as an explicit gap.
+
+### When acquisition stops but nothing looks broken
+
+`Restart=always` only helps if the daemon actually *exits*. Two failures used to leave it
+alive and the unit reporting `active (running)` with no data and no log lines: the port
+opening but no bytes arriving (dead sensor, unpowered adapter, half-broken cable), and the
+adapter vanishing so every reconnect fails. The daemon now gives up on both — after
+`--stall-timeout` seconds with no valid sample (default 120), or `--max-reconnects`
+consecutive open failures (default 20) — and exits non-zero so systemd restarts it from
+scratch, which also re-enumerates the USB device. Pass `0` to either to disable.
+
+If it is still stale after a restart, the port is exclusive, so stop the daemon before
+looking at the raw stream — this separates a wedged daemon from dead hardware:
+
+```bash
+sudo systemctl stop infra-acquire
+timeout 10 .venv/bin/python -m infrasound_monitor.acquire /dev/ttyUSB0 --sniff
+sudo systemctl start infra-acquire
+```
+
+Numbers scrolling means the sensor is fine. Nothing at all means power-cycle the INFRA20
+and replug the adapter; `sudo dmesg | grep -i usb | tail -30` will show a bus-level drop.
 
 Pi specifics:
 - **Serial port:** the INFRA20's USB adapter is usually `/dev/ttyUSB0`

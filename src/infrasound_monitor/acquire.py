@@ -173,14 +173,32 @@ def _write_live(path, buf, fs, t_end):
         pass
 
 
+class AcquisitionStalled(RuntimeError):
+    """No samples arrived for too long -- exit so systemd restarts us cleanly."""
+
+
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
         fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 2.0,
         gap_tol: float = 2.0, reconnect_delay: float = 5.0,
-        live_file=None, live_seconds: float = 600.0):
+        live_file=None, live_seconds: float = 600.0,
+        stall_timeout: float = 120.0, max_reconnects: int = 20):
     """Acquire from ``port`` into the SDS ``archive`` until interrupted.
 
     If ``live_file`` is set, also mirror the most recent ``live_seconds`` of raw
     samples into that (local) file every ~2 s so a live viewer can tail it.
+
+    Two ways acquisition can wedge without the process dying, both of which used
+    to be invisible -- ``Restart=always`` cannot help a daemon that never exits:
+
+    * the port opens but nothing arrives (sensor unpowered, dead adapter, half
+      broken cable).  ``readline`` just times out and returns b"" forever.
+    * the adapter disappears for good, so every reconnect attempt fails.
+
+    So give up rather than spin: raise ``AcquisitionStalled`` after
+    ``stall_timeout`` seconds with no parsed sample, or after ``max_reconnects``
+    consecutive failures to open the port.  Exiting non-zero lets systemd
+    restart us from scratch, which also re-enumerates the serial device.
+    Set either to 0 to disable (the old spin-forever behaviour).
     """
     import serial
     from collections import deque
@@ -188,20 +206,31 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
     writer = SdsWriter(archive, cfg, fs=fs, flush_seconds=flush_seconds, gap_tol=gap_tol)
     live = deque(maxlen=int(live_seconds * fs)) if live_file else None
     last_live = 0.0
+    last_sample = time.time()
+    fails = 0
     print(f"acquiring {port}@{baud} -> {archive}  ({cfg.seed_id}, {fs:.4f} sps)  "
-          f"Ctrl-C to stop", flush=True)
+          f"stall timeout {stall_timeout:.0f}s  Ctrl-C to stop", flush=True)
     try:
         while True:
             try:
                 with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1,
                                    timeout=1) as ser:
                     _discard_warmup(ser, warmup)
+                    fails = 0
+                    last_sample = time.time()
                     while True:
                         line = ser.readline()
                         c = parse_line(line)
                         if c is None:
+                            # readline timed out, or the line was garbage. Neither
+                            # raises, so this is where a dead sensor hides.
+                            if stall_timeout and time.time() - last_sample > stall_timeout:
+                                raise AcquisitionStalled(
+                                    f"no valid sample for {stall_timeout:.0f}s on {port} "
+                                    f"(port is open, so the sensor or cable is the suspect)")
                             continue
                         now = _now_utc()
+                        last_sample = time.time()
                         writer.add(c, now)
                         if live is not None:
                             live.append(c)
@@ -211,8 +240,13 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
             except serial.SerialException as e:
                 # USB glitch / cable pull: flush what we have and retry.
                 writer.flush()
-                print(f"serial error: {e}; reconnecting in {reconnect_delay:.0f}s ...",
-                      flush=True)
+                fails += 1
+                if max_reconnects and fails >= max_reconnects:
+                    raise AcquisitionStalled(
+                        f"{fails} consecutive failures opening {port} "
+                        f"({e}) -- giving up so systemd can restart us") from e
+                print(f"serial error: {e}; reconnecting in {reconnect_delay:.0f}s "
+                      f"(attempt {fails}/{max_reconnects or '-'}) ...", flush=True)
                 time.sleep(reconnect_delay)
     except KeyboardInterrupt:
         pass
@@ -259,6 +293,12 @@ def main(argv=None):
                         "(default: config [acquisition].live_file)")
     p.add_argument("--live-seconds", type=float, default=600.0,
                    help="length of the rolling live buffer (s)")
+    p.add_argument("--stall-timeout", type=float, default=120.0,
+                   help="exit (so systemd restarts) after this long with no valid "
+                        "sample even though the port is open; 0 disables")
+    p.add_argument("--max-reconnects", type=int, default=20,
+                   help="exit after this many consecutive failures to open the "
+                        "port, instead of retrying forever; 0 disables")
     p.add_argument("--sniff", action="store_true", help="just print raw lines and exit")
     p.add_argument("--list", action="store_true", help="list available serial ports and exit")
     a = p.parse_args(argv)
@@ -277,7 +317,8 @@ def main(argv=None):
         return
     run(port, archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
         live_file=live_file, live_seconds=a.live_seconds,
-        warmup=a.warmup, gap_tol=a.gap_tol)
+        warmup=a.warmup, gap_tol=a.gap_tol,
+        stall_timeout=a.stall_timeout, max_reconnects=a.max_reconnects)
 
 
 if __name__ == "__main__":

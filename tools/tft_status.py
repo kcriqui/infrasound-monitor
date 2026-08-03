@@ -37,13 +37,13 @@ from PIL import Image, ImageDraw, ImageFont
 try:
     from infrasound_monitor.config import (
         PA_PER_COUNT, UTC_OFFSET_HOURS, DEFAULT_STATION,
-        ARCHIVE_DIR, LIVE_FILE, PROJECT_ROOT,
+        ARCHIVE_DIR, LIVE_FILE, PROJECT_ROOT, SERIAL_PORT,
     )
 except ModuleNotFoundError:                      # running from a source checkout
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     from infrasound_monitor.config import (
         PA_PER_COUNT, UTC_OFFSET_HOURS, DEFAULT_STATION,
-        ARCHIVE_DIR, LIVE_FILE, PROJECT_ROOT,
+        ARCHIVE_DIR, LIVE_FILE, PROJECT_ROOT, SERIAL_PORT,
     )
 
 WIDTH, HEIGHT = 240, 135      # landscape drawing canvas (panel is rotated 90)
@@ -122,6 +122,53 @@ def read_live():
             if band.any():
                 out["dom_hz"] = float(freq[band][int(np.argmax(mag[band]))])
     return out
+
+
+def read_diagnostics(unit="infra-acquire"):
+    """Why is it stale?  Cheap answers to the first questions you'd SSH in to ask.
+
+    ``systemctl show`` needs no privileges (unlike ``journalctl -u`` for a system
+    unit), so this works as the unqualified ``infra`` user the service runs as.
+    """
+    import subprocess
+    out = {"unit": unit, "serial_port": str(SERIAL_PORT), "port_present": None,
+           "active": None, "sub": None, "restarts": None, "since": None,
+           "stale_after_s": STALE_S}
+    try:
+        out["port_present"] = Path(SERIAL_PORT).exists()
+    except OSError:
+        pass
+    props = ("ActiveState", "SubState", "NRestarts", "ExecMainStartTimestamp")
+    try:
+        r = subprocess.run(["systemctl", "show", unit, "--property=" + ",".join(props)],
+                           capture_output=True, text=True, timeout=5)
+        kv = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+        out["active"] = kv.get("ActiveState") or None
+        out["sub"] = kv.get("SubState") or None
+        out["restarts"] = int(kv["NRestarts"]) if kv.get("NRestarts", "").isdigit() else None
+        out["since"] = kv.get("ExecMainStartTimestamp") or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass                                    # not systemd / not installed: leave None
+    return out
+
+
+def diagnose(live, diag):
+    """One line naming the most likely cause, for the status page and /healthz.
+
+    The distinction that matters: a *running* service with a *present* port and no
+    data is a dead sensor or cable, not a software fault -- restarting won't help.
+    """
+    if live.get("present") and live.get("age_s") is not None and live["age_s"] < STALE_S:
+        return "acquiring normally"
+    if diag.get("active") not in (None, "active"):
+        return f"acquisition service is {diag['active']}/{diag.get('sub')} -- check journalctl"
+    if diag.get("port_present") is False:
+        return (f"{diag['serial_port']} is gone -- USB adapter unplugged or dropped off "
+                f"the bus; check dmesg, then the cable")
+    if not live.get("present"):
+        return "no live buffer yet -- daemon has not written a sample since it started"
+    return (f"{diag['serial_port']} is open and the service is running, but no samples "
+            f"are arriving -- suspect the sensor, its power, or the cable, not the Pi")
 
 
 def read_system():

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -50,16 +51,19 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
  canvas{width:100%;height:120px;background:#161a21;border:1px solid #232833;border-radius:10px;display:block}
  .foot{color:#697084;font-size:12px;margin-top:14px}
  .stale{opacity:.5}
+ .diag{margin:2px 0 14px;color:#ec9a55;font-size:14px;max-width:640px;line-height:1.45}
 </style></head><body><div class="wrap">
  <header><h1 id="station">INFRA20</h1><span id="pill" class="pill">…</span></header>
  <p class="site" id="site"></p>
+ <p class="diag" id="diag" hidden></p>
  <canvas id="wave" width="600" height="120"></canvas>
  <div class="grid" id="grid"></div>
  <p class="foot" id="foot">connecting…</p>
 </div>
 <script>
 const TILES=[["age","last sample"],["level","level"],["tone","tone"],["up","uptime"],
- ["today","today"],["archive","archive"],["disk","disk free"],["cpu","cpu"],["publish","last publish"]];
+ ["today","today"],["archive","archive"],["disk","disk free"],["cpu","cpu"],["publish","last publish"],
+ ["port","serial port"],["svc","acquire service"],["restarts","restarts"]];
 function fmt(d){return{
  age:d.age?d.age+" ago":"--",
  level:d.level_pa!=null?d.level_pa.toFixed(3)+" Pa":"--",
@@ -69,7 +73,10 @@ function fmt(d){return{
  archive:d.archive_gb!=null?d.archive_gb.toFixed(2)+" GB":"--",
  disk:d.disk_free_pct!=null?d.disk_free_pct.toFixed(0)+"%":"--",
  cpu:d.cpu_c!=null?d.cpu_c.toFixed(0)+" °C":"--",
- publish:d.publish_age?d.publish_age+" ago":"--"};}
+ publish:d.publish_age?d.publish_age+" ago":"--",
+ port:d.port_present==null?"--":(d.port_present?"present":"MISSING"),
+ svc:d.service||"--",
+ restarts:d.service_restarts!=null?String(d.service_restarts):"--"};}
 function drawWave(w){const c=document.getElementById("wave"),x=c.getContext("2d");
  const W=c.width,H=c.height;x.clearRect(0,0,W,H);
  x.strokeStyle="#1e242e";x.beginPath();x.moveTo(0,H/2);x.lineTo(W,H/2);x.stroke();
@@ -83,6 +90,8 @@ async function tick(){try{
  document.getElementById("site").textContent=d.site||"";
  const p=document.getElementById("pill");p.textContent=d.state;
  p.className="pill "+(d.ok?"ok":"bad");
+ const dg=document.getElementById("diag");
+ dg.textContent=d.diagnosis||"";dg.hidden=!!d.ok||!d.diagnosis;
  const f=fmt(d),g=document.getElementById("grid");g.innerHTML="";
  for(const[k,label]of TILES){const t=document.createElement("div");t.className="tile";
   t.innerHTML='<div class="k">'+label+'</div><div class="v">'+f[k]+'</div>';g.appendChild(t);}
@@ -94,9 +103,22 @@ tick();setInterval(tick,3000);
 </script></body></html>"""
 
 
+_diag_cache = {"t": 0.0, "v": None}
+
+
+def _diagnostics(ttl=10.0):
+    """Cached: the page polls every 3 s and this shells out to systemctl."""
+    now = time.time()
+    if _diag_cache["v"] is None or now - _diag_cache["t"] > ttl:
+        _diag_cache["v"] = T.read_diagnostics()
+        _diag_cache["t"] = now
+    return _diag_cache["v"]
+
+
 def collect(site_index):
     live, sysm = T.read_live(), T.read_system()
     arch, pub = T.read_archive(), T.read_publish(site_index)
+    diag = _diagnostics()
     ok = bool(live["present"] and live["age_s"] is not None and live["age_s"] < T.STALE_S)
     wave = live.get("wave")
     wave_list = None
@@ -119,15 +141,21 @@ def collect(site_index):
         "disk_free_pct": sysm.get("disk_free_pct"),
         "cpu_c": sysm.get("cpu_c"),
         "publish_age": T.fmt_age(pub) if pub is not None else None,
+        "diagnosis": T.diagnose(live, diag),
+        "serial_port": diag.get("serial_port"),
+        "port_present": diag.get("port_present"),
+        "service": (f"{diag['active']}/{diag['sub']}" if diag.get("active") else None),
+        "service_restarts": diag.get("restarts"),
+        "service_since": diag.get("since"),
         "wave": wave_list,
     }
 
 
 def make_handler(site_index):
     class Handler(BaseHTTPRequestHandler):
-        def _send(self, body, ctype):
+        def _send(self, body, ctype, code=200):
             data = body.encode() if isinstance(body, str) else body
-            self.send_response(200)
+            self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -140,7 +168,11 @@ def make_handler(site_index):
             elif path == "/status.json":
                 self._send(json.dumps(collect(site_index)), "application/json")
             elif path == "/healthz":
-                self._send("ok", "text/plain")
+                # Must reflect acquisition, not just "the web server is up" -- an
+                # unconditional 200 here reported healthy through a 6 h outage.
+                s = collect(site_index)
+                body = "ok\n" if s["ok"] else f"{s['state']}: {s['diagnosis']}\n"
+                self._send(body, "text/plain", 200 if s["ok"] else 503)
             else:
                 self.send_error(404)
 

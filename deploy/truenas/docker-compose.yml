@@ -29,7 +29,9 @@ services:
     container_name: infra-web
     restart: unless-stopped
     ports:
-      - "8081:80"                             # http://<nas-tailscale>:8081
+      # Loopback only: Tailscale Serve/Funnel runs on the host and proxies to it,
+      # so nothing needs to be reachable on the LAN. See README section 6.
+      - "127.0.0.1:8081:80"
     volumes:
       - /mnt/HDD-pool/Projects/Claude/infra/site:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

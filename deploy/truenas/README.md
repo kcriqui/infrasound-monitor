@@ -82,7 +82,15 @@ Serial port and live-file settings are ignored here — nothing acquires on the 
 ## 4. Seed the grid (once)
 
 `refresh.py` extends an existing cache and refuses to create one, so build it once.
-Unlike on the Pi, there is no reason to restrict the range:
+**Start at 2026-08-04**, the date the sensor moved to a quieter spot in the house.
+That move put a step change in the noise floor, and pooling both sides into one
+PDF-PSD and one set of band statistics would mix two different acoustic
+environments -- which matters, because the whole point is a clean "before"
+against which to judge the datacenter once it energises. Memory no longer forces
+this choice; it is the right one on the science.
+
+The pre-move record is not lost: the raw archive is untouched and the grid is
+only a cache, so a different epoch is one regeneration away.
 
 ```bash
 cd /mnt/HDD-pool/Projects/Claude/infra && git clone <this repo> repo && cd repo
@@ -91,17 +99,9 @@ docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
     bash deploy/truenas/pipeline.sh        # pulls the archive first
 docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
     python -m infrasound_monitor.waterfall /data/archive \
-      --start 2026-04-09 --end $(date -u +%Y-%m-%d) \
+      --start 2026-08-04 --end $(date -u +%Y-%m-%d) \
       --cache /data/analysis/grid_full.npz --out /tmp/seed.html
 ```
-
-> **Worth deciding here, not later:** the sensor moved to a quieter spot around
-> 2026-08-04, which puts a step change in the noise floor mid-record. Pooling both
-> sides into one PDF-PSD and one set of band statistics mixes two different
-> environments. Starting the grid at `--start 2026-08-04` gives a clean baseline for
-> the datacenter before/after comparison; starting in April keeps continuity. The raw
-> archive is untouched either way, so this is reversible — regenerate with a different
-> `--start`.
 
 ## 5. Publishing (optional)
 
@@ -121,16 +121,53 @@ NAS view is fast and private over Tailscale, while the Pages URL stays public an
 shareable, which matters if the point is eventually to show someone the datacenter
 evidence.
 
-## 6. Deploy
+## 6. A public URL over Tailscale Funnel
+
+You already funnel another project at the root of `https://truenas-scale.tail4c32e5.ts.net/`.
+Funnel only listens on **443, 8443 or 10000**, and 443's root is taken, so put the
+dashboard on 8443:
+
+```bash
+tailscale funnel --bg --https=8443 http://127.0.0.1:8081
+tailscale funnel status
+```
+
+That gives `https://truenas-scale.tail4c32e5.ts.net:8443/`.
+
+**Why a separate port rather than a path under 443.** The generated pages use only
+relative links and inline every asset, so they work fine under a path prefix -- but
+only when the URL carries a trailing slash. `.../infra/` resolves
+`waterfall_full.html` correctly; `.../infra` resolves it against the site root and
+404s. A port sidesteps that whole class of bug. If you prefer the tidier URL:
+
+```bash
+tailscale serve --bg --set-path=/infra http://127.0.0.1:8081
+```
+
+and always share the trailing-slash form.
+
+Funnel relays through Tailscale's edge, so your home IP is never exposed, and the
+`web` container binds to `127.0.0.1` so the only way in is through Tailscale.
+
+> **Do not funnel the Pi's `statusd` (port 8080).** It has no authentication and
+> exposes host telemetry. It is fine on the tailnet; it is not fine on the internet.
+
+With Funnel live, GitHub Pages becomes optional. Worth keeping both for a while:
+Pages is a CDN-backed mirror that stays up when the NAS or your home connection does
+not, and the Pages URL is already in the repo README and may be bookmarked elsewhere.
+The pipeline pushes to it anyway, so it costs nothing.
+
+## 7. Deploy
 
 Apps → Discover → **Custom App** → *Install via YAML*, and paste `docker-compose.yml`.
 Then:
 
-- Local dashboard: `http://<nas-tailscale-name>:8081`
+- Public dashboard: `https://truenas-scale.tail4c32e5.ts.net:8443/` (via Funnel, above)
+- From the NAS itself: `http://127.0.0.1:8081`
 - Logs: `tail -f /mnt/HDD-pool/Projects/Claude/infra/logs/pipeline.log`
 - Run now rather than waiting for 06:15: `docker exec infra-analysis bash deploy/truenas/pipeline.sh`
 
-## 7. Retire the Pi's copy of this job
+## 8. Retire the Pi's copy of this job
 
 Once a NAS rebuild has published successfully:
 

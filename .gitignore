@@ -41,3 +41,6 @@ claude-memory/
 Thumbs.db
 .vscode/
 .idea/
+
+# Tailscale auth key for the optional sidecar -- never commit
+deploy/truenas/.env

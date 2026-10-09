@@ -152,6 +152,52 @@ Funnel relays through Tailscale's edge, so your home IP is never exposed, and th
 > **Do not funnel the Pi's `statusd` (port 8080).** It has no authentication and
 > exposes host telemetry. It is fine on the tailnet; it is not fine on the internet.
 
+### Optional: its own tailnet hostname instead of :8443
+
+Funnel's three ports are a hard limit on Tailscale's side -- no flag or plan adds
+more. But the limit is per *node*, and every node gets its own MagicDNS name and
+its own 443. So a Tailscale sidecar gives this stack:
+
+```
+https://infra.<tailnet>.ts.net/
+```
+
+Clean root, no port, no trailing-slash caveat, and the pattern repeats for each
+future project on this box.
+
+1. **Tailnet ACLs** -- the tag must exist and be allowed to funnel:
+
+   ```json
+   "tagOwners": { "tag:infra": ["autogroup:admin"] },
+   "nodeAttrs": [ { "target": ["tag:infra"], "attr": ["funnel"] } ]
+   ```
+
+2. **Auth key** -- generate a **reusable, pre-approved, tagged** key
+   (`tag:infra`) in the admin console. Tagged nodes do not expire, so it will not
+   silently drop off in three months.
+
+   Put it in `deploy/truenas/.env` (gitignored -- never commit it):
+
+   ```
+   TS_AUTHKEY=tskey-auth-...
+   ```
+
+   If you install via the TrueNAS *Custom App* YAML box rather than the CLI,
+   substitute the key directly there instead; it is stored in TrueNAS's config,
+   not in the repo.
+
+3. **Enable it** -- in `docker-compose.yml`, strip the leading `# ` from every
+   line between `BEGIN tailscale-sidecar` and `END tailscale-sidecar`, then on
+   the `web` service comment out `ports` and uncomment `network_mode`.
+
+The state volume matters: without `/var/lib/tailscale` persisted, the container
+registers as a *new* node on every restart and you accumulate `infra-1`,
+`infra-2`... each with a different URL. `TS_USERSPACE=true` avoids needing
+`NET_ADMIN` or `/dev/net/tun`.
+
+Then `tailscale funnel status` on the NAS should list the new node, and the old
+`--https=8443` funnel can be removed with `tailscale funnel --https=8443 off`.
+
 With Funnel live, GitHub Pages becomes optional. Worth keeping both for a while:
 Pages is a CDN-backed mirror that stays up when the NAS or your home connection does
 not, and the Pages URL is already in the repo README and may be bookmarked elsewhere.

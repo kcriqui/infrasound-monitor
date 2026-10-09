@@ -1,0 +1,11 @@
+.git
+archive/
+analysis/
+site/
+references/
+data file decoding/
+claude-memory/
+**/__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/

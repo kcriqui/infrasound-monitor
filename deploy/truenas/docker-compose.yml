@@ -1,0 +1,35 @@
+# TrueNAS SCALE custom app: analysis + a local web view of the dashboard.
+#
+# The Pi keeps only acquisition (infra-acquire, statusd, the TFT) -- all tiny.
+# Everything that needs memory happens here. Deploy with the dataset path below
+# matching the one you created; see README.md in this directory.
+services:
+  analysis:
+    build:
+      context: ../..
+      dockerfile: deploy/truenas/Dockerfile
+    image: infra-analysis:local
+    container_name: infra-analysis
+    restart: unless-stopped
+    environment:
+      INFRA_DATA: /data
+      INFRA_PI: infra@100.72.190.123          # Tailscale address of the Pi
+      INFRA_PI_ARCHIVE: infrasound-monitor/archive/
+      INFRA_PI_KEY: /root/.ssh/id_infra
+      INFRA_SITE_KEY: /root/.ssh/id_site
+      INFRA_SCHEDULE: "06:15"
+      INFRA_RUN_AT_START: "0"                 # 1 = also run once on container start
+      TZ: America/Los_Angeles
+    volumes:
+      - /mnt/HDD-pool/Projects/Claude/infra:/data
+      - /mnt/HDD-pool/Projects/Claude/infra/.ssh:/root/.ssh:ro
+
+  web:
+    image: nginx:1.27-alpine
+    container_name: infra-web
+    restart: unless-stopped
+    ports:
+      - "8081:80"                             # http://<nas-tailscale>:8081
+    volumes:
+      - /mnt/HDD-pool/Projects/Claude/infra/site:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

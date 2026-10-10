@@ -44,3 +44,10 @@ Thumbs.db
 
 # Tailscale auth key for the optional sidecar -- never commit
 deploy/truenas/.env
+
+# TrueNAS dataset root (the clone lives there, beside its data): ssh keys, the
+# pipeline log, the sidecar's node state, and archived pre-NAS material
+.ssh/
+logs/
+tailscale/
+legacy/

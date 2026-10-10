@@ -16,18 +16,31 @@ the 3.6 GB USB stick that was months from full.
 
 ## 1. Dataset
 
+The dataset root **is** a clone of this repo, with the data beside the code — the same
+shape as the Pi's clone, which keeps its `archive/` inside it too:
+
 ```
 /mnt/HDD-pool/Projects/Claude/Infrasound/
+  src/ tools/ deploy/ ...  the code (tracked)
   .ssh/        id_infra (-> the Pi), id_site (-> the Pages repo)
   archive/     rsynced from the Pi; this is also the backup
   analysis/    grid_full.npz and other caches
-  site/        built dashboard; a clone of the Pages repo if you publish
+  site/        built dashboard, served by nginx
   logs/        pipeline.log
   config.toml  station identity
 ```
 
-Change the path in `docker-compose.yml` if you use a different one — it appears twice
-under `analysis` and once under `web`.
+Everything but the code is git-ignored, and docker-ignored too, so the keys and the
+archive never reach the image even though the build context is the dataset root.
+Clone first, while the dataset is still empty — git refuses to clone into a non-empty
+directory:
+
+```bash
+git clone <this repo> /mnt/HDD-pool/Projects/Claude/Infrasound
+```
+
+Change the path in `docker-compose.yml` if you use a different one — it appears once
+under each service.
 
 ## 2. Keys
 
@@ -129,7 +142,7 @@ The pre-move record is not lost: the raw archive is untouched and the grid is
 only a cache, so a different epoch is one regeneration away.
 
 ```bash
-cd /mnt/HDD-pool/Projects/Claude/Infrasound && git clone <this repo> repo && cd repo
+cd /mnt/HDD-pool/Projects/Claude/Infrasound
 docker compose -f deploy/truenas/docker-compose.yml build
 docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
     bash deploy/truenas/pipeline.sh        # pulls the archive first

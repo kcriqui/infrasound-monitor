@@ -9,3 +9,12 @@ claude-memory/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+# The build context is the TrueNAS dataset root, which also holds the private
+# keys and runtime state. None of it belongs in the image; /data is mounted.
+.ssh/
+logs/
+tailscale/
+legacy/
+config.toml
+deploy/truenas/.env

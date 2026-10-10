@@ -54,10 +54,23 @@ ts() { date -Is; }
 # which is mounted read-only so ssh could not record it on first use anyway.
 # A changed host key should stop the pull, not be silently accepted.
 echo "$(ts) [pull] $PI:$PI_ARCHIVE -> $DATA/archive"
-rsync -rlt --omit-dir-times --no-perms --no-owner --no-group --partial --mkpath \
-      -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=30" \
-      "$PI:$PI_ARCHIVE" "$DATA/archive/"
+RS_LOG="$(mktemp)"
+rsync -rlt --omit-dir-times --no-perms --no-owner --no-group --partial --mkpath       -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=30"       "$PI:$PI_ARCHIVE" "$DATA/archive/" > "$RS_LOG" 2>&1
 rc=$?
+cat "$RS_LOG"
+
+# rc 23 = "some files/attrs were not transferred". On this dataset that is the
+# expected outcome even on a perfect run: aclmode=restricted makes ZFS refuse
+# chmod even from the file's owner, because it would rewrite a non-trivial ACL,
+# and rsync always sets a mode on files it creates. The bytes land correctly and
+# the ACL-inherited mode is the one we want. So forgive rc 23 -- but only when
+# EVERY per-file error was a refused chmod, so a genuine partial transfer still
+# fails loudly.
+if [ "$rc" -eq 23 ] && grep -q '^rsync:' "$RS_LOG"    && ! grep '^rsync:' "$RS_LOG" | grep -qv 'failed to set permissions'; then
+    echo "$(ts) [pull] rc=23, but every error was a chmod refused by the dataset ACL -- data is complete"
+    rc=0
+fi
+rm -f "$RS_LOG"
 if [ "$rc" -ne 0 ]; then
     echo "$(ts) [pull] FAILED rc=$rc -- skipping rebuild so the site keeps its last good data"
     exit 1

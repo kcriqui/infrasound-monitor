@@ -19,6 +19,21 @@ SITE="$DATA/site"
 LOG="$DATA/logs/pipeline.log"
 
 mkdir -p "$DATA/logs" "$DATA/archive" "$DATA/analysis" "$SITE"
+
+# The dataset is an SMB share with NFSv4 ACLs and aclmode=restricted, where
+# chmod is refused even for root -- so the mounted keys cannot be given mode 600
+# on the host, and ssh flatly refuses a group-readable private key. Stage copies
+# inside the container instead, where the overlay filesystem has ordinary POSIX
+# semantics. Copying as root also makes them root-owned, which ssh requires.
+STAGE=/tmp/ssh
+install -d -m 700 "$STAGE"
+for pair in "$PI_KEY:id_infra" "$SITE_KEY:id_site"; do
+    src="${pair%:*}"; dst="$STAGE/${pair##*:}"
+    [ -f "$src" ] && install -m 600 "$src" "$dst"
+done
+[ -f "$PI_KEY"   ] && [ -f "$STAGE/id_infra" ] && PI_KEY="$STAGE/id_infra"
+[ -f "$SITE_KEY" ] && [ -f "$STAGE/id_site"  ] && SITE_KEY="$STAGE/id_site"
+KNOWN_HOSTS="${INFRA_KNOWN_HOSTS:-/root/.ssh/known_hosts}"
 exec >> "$LOG" 2>&1
 ts() { date -Is; }
 
@@ -31,7 +46,7 @@ ts() { date -Is; }
 # A changed host key should stop the pull, not be silently accepted.
 echo "$(ts) [pull] $PI:$PI_ARCHIVE -> $DATA/archive"
 rsync -a --partial --mkpath \
-      -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30" \
+      -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=30" \
       "$PI:$PI_ARCHIVE" "$DATA/archive/"
 rc=$?
 if [ "$rc" -ne 0 ]; then
@@ -52,7 +67,7 @@ fi
 # Only if $SITE is a clone of the Pages repo. Without one this still rebuilds
 # locally and nginx serves it; the push is the optional public mirror.
 if [ -d "$SITE/.git" ]; then
-    export GIT_SSH_COMMAND="ssh -i $SITE_KEY -o IdentitiesOnly=yes"
+    export GIT_SSH_COMMAND="ssh -i $SITE_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=accept-new"
     export GIT_AUTHOR_NAME="infra-nas"    GIT_AUTHOR_EMAIL="infra-nas@localhost"
     export GIT_COMMITTER_NAME="infra-nas" GIT_COMMITTER_EMAIL="infra-nas@localhost"
     cd "$SITE" || exit 1

@@ -42,28 +42,34 @@ ssh-keygen -t ed25519 -N "" -C "truenas->site" -f $D/.ssh/id_site
 chmod 600 $D/.ssh/id_infra $D/.ssh/id_site
 ```
 
-Then fix ownership and modes **on the NAS**. Files created over SMB come out
-owned by your SMB user and group-readable, and `ssh` refuses a private key that is
-group/world-readable *or* owned by someone other than the user running ssh. The
-analysis container runs as root, so the keys must be root-owned:
+### A note on permissions
+
+Do not bother trying to `chmod 600` these. The dataset is an SMB share with
+NFSv4 ACLs and `aclmode=restricted`, so POSIX `chmod` is refused **even for
+root** -- the ACL is authoritative. `chown` works; `chmod` returns
+`Operation not permitted`.
+
+`pipeline.sh` handles this: at the start of every run it copies the keys to
+`/tmp/ssh` inside the container with mode 600, and uses the copies. The overlay
+filesystem has ordinary POSIX semantics, so this sidesteps the host ACLs
+entirely, and copying as root satisfies ssh's ownership check too.
+
+Worth doing anyway, for hygiene -- it stops the private keys being readable
+through the SMB share:
 
 ```bash
-cd /mnt/HDD-pool/Projects/Claude/Infrasound/.ssh
-sudo chown 0:0 id_infra id_site && sudo chmod 600 id_infra id_site
-sudo chmod 644 known_hosts && chmod 700 .
+sudo chown 0:0 .ssh/id_infra .ssh/id_site
 ```
 
-A useful side effect: root-owned 600 keys are no longer readable through the SMB
-share, which is where private keys should not be anyway.
-
-Pin the Pi's host key so the read-only mount never needs to write `known_hosts`:
+To test the pull **by hand**, mirror what the container does rather than
+pointing ssh at the share directly, or it will reject the key's mode:
 
 ```bash
-ssh-keyscan -t ed25519 100.72.190.123 > known_hosts
+cd /mnt/HDD-pool/Projects/Claude/Infrasound
+sudo install -m 600 .ssh/id_infra /tmp/k
+sudo ssh -i /tmp/k -o IdentitiesOnly=yes -o UserKnownHostsFile=.ssh/known_hosts     infra@100.72.190.123 'ls infrasound-monitor/archive/2026/XX/INFRA/SDF.D | tail -3'
+sudo rm -f /tmp/k
 ```
-
-`pipeline.sh` uses `StrictHostKeyChecking=yes`, so a changed host key stops the
-pull rather than being accepted silently.
 
 `id_infra.pub` goes on the **Pi**, prefixed with `restrict` (no port forwarding, agent
 forwarding, PTY or X11 — rsync still works):

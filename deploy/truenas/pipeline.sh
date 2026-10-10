@@ -12,8 +12,8 @@ set -uo pipefail
 DATA="${INFRA_DATA:-/data}"
 PI="${INFRA_PI:?set INFRA_PI, e.g. infra@100.72.190.123}"
 PI_ARCHIVE="${INFRA_PI_ARCHIVE:-infrasound-monitor/archive/}"
-PI_KEY="${INFRA_PI_KEY:-/root/.ssh/id_infra}"
-SITE_KEY="${INFRA_SITE_KEY:-/root/.ssh/id_site}"
+PI_KEY="${INFRA_PI_KEY:-$DATA/.ssh/id_infra}"
+SITE_KEY="${INFRA_SITE_KEY:-$DATA/.ssh/id_site}"
 CACHE="$DATA/analysis/grid_full.npz"
 SITE="$DATA/site"
 LOG="$DATA/logs/pipeline.log"
@@ -31,9 +31,14 @@ for pair in "$PI_KEY:id_infra" "$SITE_KEY:id_site"; do
     src="${pair%:*}"; dst="$STAGE/${pair##*:}"
     [ -f "$src" ] && install -m 600 "$src" "$dst"
 done
-[ -f "$PI_KEY"   ] && [ -f "$STAGE/id_infra" ] && PI_KEY="$STAGE/id_infra"
+if [ -f "$STAGE/id_infra" ]; then
+    PI_KEY="$STAGE/id_infra"
+else
+    echo "$(ts) [pull] cannot read $PI_KEY -- check it is readable by uid $(id -u)"
+    exit 1
+fi
 [ -f "$SITE_KEY" ] && [ -f "$STAGE/id_site"  ] && SITE_KEY="$STAGE/id_site"
-KNOWN_HOSTS="${INFRA_KNOWN_HOSTS:-/root/.ssh/known_hosts}"
+KNOWN_HOSTS="${INFRA_KNOWN_HOSTS:-$DATA/.ssh/known_hosts}"
 exec >> "$LOG" 2>&1
 ts() { date -Is; }
 

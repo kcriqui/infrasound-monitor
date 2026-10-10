@@ -22,14 +22,16 @@ services:
       HOME: /tmp                              # non-root needs a writable HOME for git/ssh
       INFRA_PI: infra@100.72.190.123          # Tailscale address of the Pi
       INFRA_PI_ARCHIVE: infrasound-monitor/archive/
-      INFRA_PI_KEY: /root/.ssh/id_infra
-      INFRA_SITE_KEY: /root/.ssh/id_site
+      # Inside /data, not /root: the container runs as a non-root uid, and
+      # /root is mode 700 so it cannot even traverse into a mount there.
+      INFRA_PI_KEY: /data/.ssh/id_infra
+      INFRA_SITE_KEY: /data/.ssh/id_site
+      INFRA_KNOWN_HOSTS: /data/.ssh/known_hosts
       INFRA_SCHEDULE: "06:15"
       INFRA_RUN_AT_START: "0"                 # 1 = also run once on container start
       TZ: America/Los_Angeles
     volumes:
       - /mnt/HDD-pool/Projects/Claude/Infrasound:/data
-      - /mnt/HDD-pool/Projects/Claude/Infrasound/.ssh:/root/.ssh:ro
 
   web:
     image: nginx:1.27-alpine

@@ -26,6 +26,8 @@ services:
       # /root is mode 700 so it cannot even traverse into a mount there.
       INFRA_PI_KEY: /data/.ssh/id_infra
       INFRA_SITE_KEY: /data/.ssh/id_site
+      # Optional GitHub Pages mirror. Unset it to serve locally only.
+      INFRA_SITE_REPO: git@github.com:kcriqui/infrasound-monitor-site.git
       INFRA_KNOWN_HOSTS: /data/.ssh/known_hosts
       INFRA_SCHEDULE: "06:15"
       INFRA_RUN_AT_START: "0"                 # 1 = also run once on container start

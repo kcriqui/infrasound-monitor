@@ -86,27 +86,36 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 # ---- 3. publish ------------------------------------------------------------
-# Only if $SITE is a clone of the Pages repo. Without one this still rebuilds
-# locally and nginx serves it; the push is the optional public mirror.
-if [ -d "$SITE/.git" ]; then
+# Optional mirror to GitHub Pages. The clone lives in the container's own
+# filesystem, never in the dataset: git chmods its lock files, and this dataset
+# (aclmode=restricted) refuses chmod even for the owner, so a clone there fails
+# on `git clone` and would keep failing on every add/commit. Keeping it out also
+# means no .git ends up in the directory nginx serves.
+if [ -n "${INFRA_SITE_REPO:-}" ]; then
     export GIT_SSH_COMMAND="ssh -i $SITE_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=accept-new"
     export GIT_AUTHOR_NAME="infra-nas"    GIT_AUTHOR_EMAIL="infra-nas@localhost"
     export GIT_COMMITTER_NAME="infra-nas" GIT_COMMITTER_EMAIL="infra-nas@localhost"
-    cd "$SITE" || exit 1
-    git add -A
-    if git rev-parse --verify HEAD >/dev/null 2>&1; then
-        git commit --amend -m "site update $(ts)" --quiet 2>/dev/null
-    else
-        git commit -m "initial site" --quiet 2>/dev/null
-    fi
-    if git remote | grep -q .; then
-        if git push --force --quiet; then
-            echo "$(ts) [publish] pushed"
+    WORK="$(mktemp -d)"
+    if git clone --depth 1 -q "$INFRA_SITE_REPO" "$WORK/site" 2>&1; then
+        find "$WORK/site" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+        cp -r "$SITE"/. "$WORK/site"/
+        cd "$WORK/site"
+        git add -A
+        if git diff --cached --quiet; then
+            echo "$(ts) [publish] no change since the last push"
         else
-            echo "$(ts) [publish] push FAILED -- site is still correct locally"
+            git commit --amend -m "site update $(ts)" --quiet 2>/dev/null                 || git commit -m "site update $(ts)" --quiet
+            if git push --force --quiet; then
+                echo "$(ts) [publish] pushed to $INFRA_SITE_REPO"
+            else
+                echo "$(ts) [publish] push FAILED -- the local site is still correct"
+            fi
         fi
+    else
+        echo "$(ts) [publish] could not clone $INFRA_SITE_REPO -- serving locally only"
     fi
+    cd /; rm -rf "$WORK"
 else
-    echo "$(ts) [publish] $SITE is not a git clone -- serving locally only"
+    echo "$(ts) [publish] INFRA_SITE_REPO unset -- serving locally only"
 fi
 echo "$(ts) [done]"

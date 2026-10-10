@@ -41,11 +41,15 @@ ts() { date -Is; }
 # No --delete, deliberately: this copy is also the backup, and the archive is
 # append-only. If the Pi ever loses its archive, --delete would propagate that
 # loss here -- which is the one thing this copy exists to prevent.
+# -rlt rather than -a: -a implies -pog, i.e. reproduce the source's permissions
+# and ownership. The Pi's uid/gid are meaningless here, the dataset has
+# aclmode=restricted so chmod is refused, and we no longer run as root so chown
+# would fail regardless. Let the dataset's own ACL inheritance decide.
 # Strict, not accept-new: the Pi's host key is pinned in .ssh/known_hosts,
 # which is mounted read-only so ssh could not record it on first use anyway.
 # A changed host key should stop the pull, not be silently accepted.
 echo "$(ts) [pull] $PI:$PI_ARCHIVE -> $DATA/archive"
-rsync -a --partial --mkpath \
+rsync -rlt --omit-dir-times --no-perms --no-owner --no-group --partial --mkpath \
       -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=30" \
       "$PI:$PI_ARCHIVE" "$DATA/archive/"
 rc=$?

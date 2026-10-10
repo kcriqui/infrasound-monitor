@@ -54,12 +54,19 @@ root** -- the ACL is authoritative. `chown` works; `chmod` returns
 filesystem has ordinary POSIX semantics, so this sidesteps the host ACLs
 entirely, and copying as root satisfies ssh's ownership check too.
 
-Worth doing anyway, for hygiene -- it stops the private keys being readable
-through the SMB share:
+The keys must stay readable by the uid the container runs as (the dataset
+owner, see `user:` in the compose file), because `pipeline.sh` reads them to make
+its 600-mode copies:
 
 ```bash
-sudo chown 0:0 .ssh/id_infra .ssh/id_site
+sudo chown 1000:1000 .ssh/id_infra .ssh/id_site    # match your dataset owner
 ```
+
+That does mean the private keys are readable through the SMB share, since it is
+the same uid. If that bothers you, put them on a separate, unshared dataset owned
+by the same uid and point the `.ssh` bind mount at it -- the container does not
+care where they come from. On a home LAN, with a `restrict`-scoped key on the Pi
+and a single-repo deploy key, the exposure is modest.
 
 To test the pull **by hand**, mirror what the container does rather than
 pointing ssh at the share directly, or it will reject the key's mode:

@@ -11,8 +11,15 @@ services:
     image: infra-analysis:local
     container_name: infra-analysis
     restart: unless-stopped
+    # Run as the dataset's owner, not root. The dataset is acltype=nfsv4 with
+    # aclmode=restricted; container root does not get the override a host root
+    # shell does, and rsync could create directories there but not files
+    # (EPERM). As the owning uid, ordinary POSIX permissions apply and it just
+    # works. Override via .env if your dataset is owned by different ids.
+    user: "${INFRA_UID:-1000}:${INFRA_GID:-1000}"
     environment:
       INFRA_DATA: /data
+      HOME: /tmp                              # non-root needs a writable HOME for git/ssh
       INFRA_PI: infra@100.72.190.123          # Tailscale address of the Pi
       INFRA_PI_ARCHIVE: infrasound-monitor/archive/
       INFRA_PI_KEY: /root/.ssh/id_infra

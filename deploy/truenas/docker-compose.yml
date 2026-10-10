@@ -34,13 +34,18 @@ services:
       - /mnt/HDD-pool/Projects/Claude/Infrasound:/data
 
   web:
-    image: nginx:1.27-alpine
+    # Unprivileged variant: it listens on 8080, so it can run as a non-root uid.
+    # That matters because the site files are mode 770 owned by the dataset owner
+    # and, on this acltype=nfsv4 dataset, even container root cannot read them --
+    # stock nginx returned 403 for every file.
+    image: nginxinc/nginx-unprivileged:1.27-alpine
     container_name: infra-web
     restart: unless-stopped
+    user: "${INFRA_UID:-3000}:${INFRA_GID:-0}"
     # Loopback only: host-level Tailscale Serve/Funnel proxies to it, so nothing
     # needs to be reachable on the LAN. See README section 6.
     ports:
-      - "127.0.0.1:8081:80"
+      - "127.0.0.1:8081:8080"
     # With the tailscale sidecar below, comment out `ports` above and uncomment
     # this instead: web then shares the sidecar's network namespace, and Funnel
     # terminates TLS there. No host port is involved at all.

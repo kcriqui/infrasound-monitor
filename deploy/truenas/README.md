@@ -17,7 +17,7 @@ the 3.6 GB USB stick that was months from full.
 ## 1. Dataset
 
 ```
-/mnt/HDD-pool/Projects/Infrasound/
+/mnt/HDD-pool/Projects/Claude/Infrasound/
   .ssh/        id_infra (-> the Pi), id_site (-> the Pages repo)
   archive/     rsynced from the Pi; this is also the backup
   analysis/    grid_full.npz and other caches
@@ -35,12 +35,35 @@ Both generated **on the NAS**, kept in the dataset rather than `/root/.ssh` so t
 survive SCALE upgrades and are mountable into the container.
 
 ```bash
-D=/mnt/HDD-pool/Projects/Infrasound
+D=/mnt/HDD-pool/Projects/Claude/Infrasound
 mkdir -p $D/.ssh && chmod 700 $D/.ssh
 ssh-keygen -t ed25519 -N "" -C "truenas->pi"   -f $D/.ssh/id_infra
 ssh-keygen -t ed25519 -N "" -C "truenas->site" -f $D/.ssh/id_site
 chmod 600 $D/.ssh/id_infra $D/.ssh/id_site
 ```
+
+Then fix ownership and modes **on the NAS**. Files created over SMB come out
+owned by your SMB user and group-readable, and `ssh` refuses a private key that is
+group/world-readable *or* owned by someone other than the user running ssh. The
+analysis container runs as root, so the keys must be root-owned:
+
+```bash
+cd /mnt/HDD-pool/Projects/Claude/Infrasound/.ssh
+sudo chown 0:0 id_infra id_site && sudo chmod 600 id_infra id_site
+sudo chmod 644 known_hosts && chmod 700 .
+```
+
+A useful side effect: root-owned 600 keys are no longer readable through the SMB
+share, which is where private keys should not be anyway.
+
+Pin the Pi's host key so the read-only mount never needs to write `known_hosts`:
+
+```bash
+ssh-keyscan -t ed25519 100.72.190.123 > known_hosts
+```
+
+`pipeline.sh` uses `StrictHostKeyChecking=yes`, so a changed host key stops the
+pull rather than being accepted silently.
 
 `id_infra.pub` goes on the **Pi**, prefixed with `restrict` (no port forwarding, agent
 forwarding, PTY or X11 — rsync still works):
@@ -65,7 +88,7 @@ ssh -i $D/.ssh/id_infra -o IdentitiesOnly=yes infra@100.72.190.123 \
 ## 3. Config
 
 ```bash
-cp config.example.toml /mnt/HDD-pool/Projects/Infrasound/config.toml
+cp config.example.toml /mnt/HDD-pool/Projects/Claude/Infrasound/config.toml
 ```
 
 Set the station identity to match the Pi's, and point the archive at the container's
@@ -93,7 +116,7 @@ The pre-move record is not lost: the raw archive is untouched and the grid is
 only a cache, so a different epoch is one regeneration away.
 
 ```bash
-cd /mnt/HDD-pool/Projects/Infrasound && git clone <this repo> repo && cd repo
+cd /mnt/HDD-pool/Projects/Claude/Infrasound && git clone <this repo> repo && cd repo
 docker compose -f deploy/truenas/docker-compose.yml build
 docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
     bash deploy/truenas/pipeline.sh        # pulls the archive first
@@ -108,7 +131,7 @@ docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
 To keep the public GitHub Pages site, make `site/` a clone of the Pages repo:
 
 ```bash
-cd /mnt/HDD-pool/Projects/Infrasound
+cd /mnt/HDD-pool/Projects/Claude/Infrasound
 GIT_SSH_COMMAND="ssh -i .ssh/id_site -o IdentitiesOnly=yes" \
   git clone git@github.com:<you>/<site-repo>.git site
 ```
@@ -210,7 +233,7 @@ Then:
 
 - Public dashboard: `https://truenas-scale.tail4c32e5.ts.net:8443/` (via Funnel, above)
 - From the NAS itself: `http://127.0.0.1:8081`
-- Logs: `tail -f /mnt/HDD-pool/Projects/Infrasound/logs/pipeline.log`
+- Logs: `tail -f /mnt/HDD-pool/Projects/Claude/Infrasound/logs/pipeline.log`
 - Run now rather than waiting for 06:15: `docker exec infra-analysis bash deploy/truenas/pipeline.sh`
 
 ## 8. Retire the Pi's copy of this job

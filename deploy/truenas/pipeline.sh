@@ -26,9 +26,12 @@ ts() { date -Is; }
 # No --delete, deliberately: this copy is also the backup, and the archive is
 # append-only. If the Pi ever loses its archive, --delete would propagate that
 # loss here -- which is the one thing this copy exists to prevent.
+# Strict, not accept-new: the Pi's host key is pinned in .ssh/known_hosts,
+# which is mounted read-only so ssh could not record it on first use anyway.
+# A changed host key should stop the pull, not be silently accepted.
 echo "$(ts) [pull] $PI:$PI_ARCHIVE -> $DATA/archive"
 rsync -a --partial --mkpath \
-      -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" \
+      -e "ssh -i $PI_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30" \
       "$PI:$PI_ARCHIVE" "$DATA/archive/"
 rc=$?
 if [ "$rc" -ne 0 ]; then

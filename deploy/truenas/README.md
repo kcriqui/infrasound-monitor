@@ -249,6 +249,21 @@ Then:
 - Logs: `tail -f /mnt/HDD-pool/Projects/Claude/Infrasound/logs/pipeline.log`
 - Run now rather than waiting for 06:15: `docker exec infra-analysis bash deploy/truenas/pipeline.sh`
 
+> **After changing any file in the repo, rebuild before running.** The image
+> `COPY`s the source, so a `git pull` alone changes nothing the container sees --
+> it will keep running the old script and the symptom is a stale log message
+> rather than an error:
+>
+> ```bash
+> docker compose -f deploy/truenas/docker-compose.yml build >   && docker compose -f deploy/truenas/docker-compose.yml up -d
+> ```
+
+## Turning the GitHub Pages mirror off
+
+Once the NAS has proved reliable, unset `INFRA_SITE_REPO` in the compose file,
+rebuild, and delete the `infra-nas` deploy key from the site repo. The dashboard
+then lives only at the Funnel URL.
+
 ## 8. Retire the Pi's copy of this job
 
 Once a NAS rebuild has published successfully:

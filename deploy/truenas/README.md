@@ -59,7 +59,7 @@ owner, see `user:` in the compose file), because `pipeline.sh` reads them to mak
 its 600-mode copies:
 
 ```bash
-sudo chown 1000:1000 .ssh/id_infra .ssh/id_site    # match your dataset owner
+sudo chown 3000:0 .ssh/id_infra .ssh/id_site    # 3000 = kevin, the dataset owner
 ```
 
 That does mean the private keys are readable through the SMB share, since it is

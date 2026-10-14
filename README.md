@@ -1,9 +1,11 @@
 # infrasound-monitor
 
-### 🌊 [**Live dashboard → kcriqui.github.io/infrasound-monitor-site**](https://kcriqui.github.io/infrasound-monitor-site/)
+### 🌊 [**Live dashboard → truenas-scale.tail4c32e5.ts.net:8443**](https://truenas-scale.tail4c32e5.ts.net:8443/)
 
-Auto-updated daily: spectral waterfall, long-term noise (PDF-PSD), data availability,
-and a night-only persistent-tone hunt for datacenter noise.
+Rebuilt daily at 06:15 Pacific: spectral waterfall, long-term noise (PDF-PSD), data
+availability, and a night-only persistent-tone hunt for datacenter noise. Mirrored to
+[kcriqui.github.io/infrasound-monitor-site](https://kcriqui.github.io/infrasound-monitor-site/),
+which stays up if the home connection does not.
 
 ---
 
@@ -16,8 +18,10 @@ This replaces [AmaSeis](https://www.iris.edu/hq/) for infrasound use: AmaSeis st
 data in a nonstandard hourly `.Z` format with no embedded calibration. Here the data
 is calibrated, self-describing, and portable.
 
-> **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)** — clone, edit
-> `config.toml` for your station, and run `deploy\setup.ps1`.
+> **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)**: a Raspberry Pi
+> for acquisition (`deploy/setup.sh`), or a single Windows PC (`deploy\setup.ps1`). For a
+> long-running station, move the nightly analysis to a bigger always-on box; this
+> station's is a TrueNAS server ([deploy/truenas/README.md](deploy/truenas/README.md)).
 
 ## Why these formats
 
@@ -214,11 +218,15 @@ python tools/transients.py "C:/Users/you/infra-archive" \
 - [x] Live acquisition daemon (`infra-acquire`) — framing hardware-verified; auto-start service
 - [x] AmaSeis-style live drum viewer (`tools/live.py`)
 - [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
-- [x] Public, auto-updating dashboard (GitHub Pages)
-- [x] Turnkey deploy — Windows + Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`)
-- [ ] Serve the live archive over SeedLink for real-time remote views
+- [x] Public, auto-updating dashboard (self-hosted over Tailscale Funnel, mirrored to GitHub Pages)
+- [x] Turnkey deploy: Windows, Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
+      and a TrueNAS SCALE analysis stack that pulls from the Pi (`deploy/truenas/`)
+- [ ] One-command before/after comparison for when the datacenter energises
+- [ ] G-weighting (ISO 7196) for health-threshold context
 - [ ] Event attribution — correlate transients with train (GTFS) + aircraft (ADS-B) data
-- [ ] Relocate the sensor to a quiet outdoor site for the real "before" baseline
+- [ ] Serve the live archive over SeedLink for real-time remote views
+- [ ] Relocate the sensor to a quiet outdoor site (it moved to a quieter indoor spot on
+      2026-08-04, and the published baseline starts there)
 
 ## Layout
 
@@ -236,7 +244,8 @@ tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dash
                  sim_infra20.py (synthetic serial source for hardware-free testing)
 deploy/          Windows: setup.ps1 / acquire-daemon.ps1 / publish.ps1
                  Linux:   setup.sh (--dashboard/--display/--swap/--backup) + backup.sh
-                          + *.service / *.timer  (systemd: acquire / dashboard / display / backup)
+                          + *.service / *.timer  (systemd: acquire / dashboard / display / status / backup)
+                 truenas/ Docker stack: pull archive from the Pi, rebuild, serve, publish
 config.example.toml  copy to config.toml (git-ignored) and edit for your station
 DEPLOY.md        deployment guide (Windows + Raspberry Pi)
 ```

@@ -1,9 +1,17 @@
 # Deploying the INFRA20 monitor
 
-Stand up the tool on your own Windows PC. You need an
-**[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
-serial/USB port and **Python 3.10+**. (Linux / Raspberry Pi support is planned — see
-the end.)
+You need an **[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
+serial/USB port and **Python 3.10+**. There are three ways to run it:
+
+| Setup | Acquires | Analyses + publishes | Guide |
+|---|---|---|---|
+| Single Windows PC | the PC | the PC | sections 1–6 below |
+| Raspberry Pi | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
+| **Pi + analysis server** (this station since 2026-10) | the Pi | an always-on box with more RAM, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
+
+The split exists because acquisition stays tiny forever, but the nightly rebuild
+processes the *whole* record and grows with it. On a 1 GB Pi it ran out of memory
+after about six months of data.
 
 ## 1. Get the code
 
@@ -118,11 +126,21 @@ the PSD grid cache once first (the `waterfall.py ... --cache` command above).
 
 A dedicated Raspberry Pi is the ideal always-on monitor — it boots straight into
 acquiring with **no login required**, so it rides through power cuts and updates that
-would strand the Windows box (see "Surviving reboots" above). A **Pi 3B (1 GB)** is
-enough to run *everything* — acquisition, the nightly analysis + site rebuild, and a
-small status screen — as long as you add swap; a Pi 4/5 just does the analysis faster.
+would strand the Windows box (see "Surviving reboots" above). This station runs a
+**Pi 3B+ (1 GB)**.
 
-**Distro:** flash **Raspberry Pi OS Lite (64-bit, Bookworm)** with Raspberry Pi Imager.
+**What a 1 GB Pi can carry.** Acquisition, the status page, the TFT and the backup are
+light and stay that way. The nightly analysis + site rebuild is not: it covers the whole
+record, so its memory need grows with the archive. With `--swap`, a 1 GB Pi coped until
+the archive held about six months of data. By October 2026 the rebuild wanted ~1.3 GB,
+and it took the Pi down three nights running. Acquisition stayed healthy throughout. So
+run everything on the Pi to start, and plan to move the analysis to a bigger machine
+([deploy/truenas/README.md](deploy/truenas/README.md)) before then. With the analysis
+moved, the Pi needs no `--dashboard` and holds no push credentials. A Pi 4 would only
+postpone the problem.
+
+**Distro:** flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. This
+station runs Trixie, and Bookworm works too.
 No desktop is needed — the tools run headless and the optional TFT is drawn by a Python
 script. Use Imager's gear menu to preset the **hostname, SSH, Wi-Fi and locale** so it's
 headless from first boot. 64-bit matters: it gets prebuilt ARM wheels for numpy/scipy/
@@ -135,6 +153,9 @@ cp config.example.toml config.toml       # edit: port = "/dev/ttyUSB0", coordina
 
 # Full build: acquisition + daily dashboard + Mini PiTFT display + swap + nightly backup
 bash deploy/setup.sh --dashboard --display --swap --status --backup user@nas:/infra-backup
+
+# Acquisition-only Pi (analysis on another machine, which pulls the archive over ssh)
+bash deploy/setup.sh --display --status --backup /mnt/usb/infra-backup
 
 sudo systemctl start infra-acquire       # start after editing a freshly-created config
 sudo reboot                              # once, so dialout/spi/gpio groups + SPI apply
@@ -158,6 +179,8 @@ The analysis step (PPSD, wide-range renders) can exceed 1 GB of RAM and get OOM-
 `--swap` bumps the swapfile to 2 GB so it completes — slower, but it finishes. The design
 already helps: `psd.py` keeps an incremental grid cache, so each nightly run only
 processes the *new* hours and the pages render from the cached grid, not the raw archive.
+Swap only buys time, though. Rendering still loads the whole grid, so see "What a 1 GB
+Pi can carry" above. An acquisition-only Pi doesn't need `--swap`.
 
 ### `--display` — Mini PiTFT 1.14" status screen
 
@@ -226,12 +249,20 @@ echo "UUID=<uuid>  /mnt/usb  ext4  defaults,nofail,noatime  0  2" | sudo tee -a 
 sudo mount -a && sudo chown "$USER":"$USER" /mnt/usb
 ```
 
+If an analysis server pulls the archive (the TrueNAS stack does, with no `--delete`, onto
+ZFS with snapshots), that pull is your off-Pi backup. A USB stick then serves as a cheap
+third copy.
+
 Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already installed,
 `sudo systemctl start infra-backup` to test). Confirm the nightly schedule with
 `systemctl list-timers 'infra-*'`. Size the drive for your retention — the archive grows
 ~3.5 GB/year, so a 4 GB stick holds roughly a year.
 
 ### Publishing the dashboard to GitHub Pages
+
+*This is for a Pi that does its own analysis. If an analysis server builds the site, it
+publishes instead, with its own deploy key
+([deploy/truenas/README.md](deploy/truenas/README.md)), and the Pi needs none of this.*
 
 The `--dashboard` timer runs `deploy/publish.sh`, which rebuilds the dashboard into
 `site/` and, when `site/` is a git clone of your Pages repo, force-pushes a single amended
@@ -271,10 +302,12 @@ once the sensor is on the Pi, build the PSD grid cache once
 (`.venv/bin/infra-waterfall archive --start <date> --end <date> --cache
 analysis/grid_full.npz`) and the nightly run keeps it current.
 
-> **Avoid duelling publishers:** if another machine (e.g. the old Windows box) also
-> force-pushes to the same Pages repo, disable it once the Pi is publishing
-> (`Disable-ScheduledTask -TaskName InfraDashboard` on Windows) — otherwise the two
-> overwrite each other and the site flip-flops between fresh and stale data.
+> **Avoid duelling publishers:** only one machine may force-push to the Pages repo.
+> When publishing moves (Windows → Pi, or Pi → analysis server), disable the old one
+> straight away: `Disable-ScheduledTask -TaskName InfraDashboard` on Windows, or
+> `sudo systemctl disable --now infra-dashboard.timer` on the Pi. Then delete its deploy
+> key from the site repo. Otherwise the two overwrite each other and the site flip-flops
+> between fresh and stale data.
 
 ### Test the Pi before you move the sensor (avoid a data gap)
 
@@ -391,7 +424,7 @@ and should span the whole rest of the disk.
 > Substitute your SSD's device for `/dev/sdX` throughout.
 
 ```bash
-sudo systemctl stop infra-dashboard.timer infra-backup.timer   # no data gap from these
+sudo systemctl stop infra-dashboard.timer infra-backup.timer   # whichever are enabled; no data gap
 
 sudo wipefs -a /dev/sdX1 /dev/sdX2 2>/dev/null; sudo wipefs -a /dev/sdX
 sudo parted /dev/sdX --script mklabel msdos \
@@ -447,10 +480,12 @@ systemctl status infra-acquire
 curl -s localhost:8080/status.json      # age_s small, today_mb climbing
 ```
 
-Let one nightly rebuild run and check `deploy/publish.log` for a `pushed` line, then
+Let one nightly rebuild run (`deploy/publish.log` on a self-publishing Pi, or the analysis
+server's next pull) and confirm it succeeded, then
 **keep the SD card untouched** as a rollback — two-minute recovery if the SSD misbehaves,
 and a point-in-time snapshot of the archive. Because this is a clone, the hostname, SSH
-host keys, VPN identity, deploy key and systemd units all carry over unchanged.
+host keys, VPN identity, `authorized_keys`, any deploy key and systemd units all carry
+over unchanged.
 
 On a Pi 3B+ the USB bus is 2.0 and shared with Ethernet, so expect **endurance and
 capacity, not speed**. If it won't boot at all, suspect the USB–SATA bridge rather than the
@@ -481,8 +516,10 @@ intermittent faults that are miserable to diagnose headless.
 ## Notes
 
 - **One tree.** Everything lives under the project folder: code, `config.toml`, the
-  `archive/`, `analysis/`, and generated `site/`. Put it on a **local** disk (not a
-  network or cloud-synced folder) so the 24/7 daemon writes reliably.
+  `archive/`, `analysis/`, and generated `site/`. On the acquiring machine, put it on a
+  **local** disk (not a network or cloud-synced folder) so the 24/7 daemon writes
+  reliably. An analysis server keeps the same shape, with the clone as its dataset root
+  and the archive pulled into it.
 - **WSL** is fine for the *analysis* tools, but serial acquisition in WSL2 needs
   `usbipd-win` to attach the USB device — a native Linux box or Raspberry Pi is simpler
   for the daemon.

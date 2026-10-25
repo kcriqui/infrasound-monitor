@@ -231,9 +231,8 @@ future project on this box.
    TS_AUTHKEY=tskey-auth-...
    ```
 
-   If you install via the TrueNAS *Custom App* YAML box rather than the CLI,
-   substitute the key directly there instead; it is stored in TrueNAS's config,
-   not in the repo.
+   Compose reads `.env` from the compose file's directory, so it is picked up by
+   the commands in section 7 with no extra flags.
 
 3. **Enable it** -- in `docker-compose.yml`, strip the leading `# ` from every
    line between `BEGIN tailscale-sidecar` and `END tailscale-sidecar`, then on
@@ -254,8 +253,22 @@ The pipeline pushes to it anyway, so it costs nothing.
 
 ## 7. Deploy
 
-Apps → Discover → **Custom App** → *Install via YAML*, and paste `docker-compose.yml`.
-Then:
+Run it with the Compose CLI from the dataset root, **not** as a TrueNAS *Custom App*.
+The compose file uses relative paths (`build.context: ../..` and `./nginx.conf`), which
+only resolve from the repo. A pasted Custom App YAML has no repo beside it, and it would
+be renamed `ix-<app>` as well.
+
+```bash
+cd /mnt/HDD-pool/Projects/Claude/Infrasound
+docker compose -f deploy/truenas/docker-compose.yml build
+docker compose -f deploy/truenas/docker-compose.yml up -d
+```
+
+The project is named **`infrasound`**, pinned by `name:` in the compose file rather
+than taken from the directory name (which would make it `truenas`). So
+`docker compose ls` lists it as `infrasound`, its network is `infrasound_default`, and
+`docker compose -p infrasound ps` works from any directory. Both containers use
+`restart: unless-stopped`, so they come back after a NAS reboot.
 
 - Public dashboard: `https://truenas-scale.tail4c32e5.ts.net:8443/` (via Funnel, above)
 - From the NAS itself: `http://127.0.0.1:8081`
@@ -268,7 +281,8 @@ Then:
 > rather than an error:
 >
 > ```bash
-> docker compose -f deploy/truenas/docker-compose.yml build >   && docker compose -f deploy/truenas/docker-compose.yml up -d
+> docker compose -f deploy/truenas/docker-compose.yml build \
+>   && docker compose -f deploy/truenas/docker-compose.yml up -d
 > ```
 
 ## Turning the GitHub Pages mirror off

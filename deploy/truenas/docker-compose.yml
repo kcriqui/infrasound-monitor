@@ -1,8 +1,17 @@
-# TrueNAS SCALE custom app: analysis + a local web view of the dashboard.
+# TrueNAS SCALE Compose stack: analysis + a local web view of the dashboard.
+# Run with the Compose CLI from the repo, not as a Custom App (README section 7).
 #
 # The Pi keeps only acquisition (infra-acquire, statusd, the TFT) -- all tiny.
 # Everything that needs memory happens here. Deploy with the dataset path below
 # matching the one you created; see README.md in this directory.
+
+# Pin the project name. Without it Compose names the project after this file's
+# directory -- "truenas" -- which says nothing about what runs here and is the
+# kind of generic name another stack can collide with. Pinned, every
+# `docker compose -f …` command (and `docker compose -p infrasound …` from
+# anywhere) addresses this stack, and its network is infrasound_default.
+name: infrasound
+
 services:
   analysis:
     build:

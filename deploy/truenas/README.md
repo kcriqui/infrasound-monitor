@@ -7,8 +7,15 @@ card, and took the machine down three nights running — acquisition stayed heal
 throughout, which is the clue that the two jobs belong on different machines.
 
 So: the Pi keeps `infra-acquire`, `statusd` and the TFT. TrueNAS pulls the archive,
-rebuilds, and serves. At 32 GB there is roughly a decade of headroom against a job
-growing ~2.7 GB/year.
+rebuilds, and serves.
+
+**Update, late October 2026:** the memory growth itself is fixed. The grid cache is
+now memory-mapped and the rebuild streams over it, so peak memory stays at ~300–350 MB
+however long the record gets. That was measured out to 7 years of synthetic record
+inside a 1 GB cap. A 1 GB Pi could run the whole job again. The NAS split is still
+worthwhile for other reasons: snapshotted off-Pi backups, a faster rebuild (its time
+does still grow with the record), and serving the dashboard. But it's a choice now,
+not a necessity.
 
 Pulling (rather than having the Pi push) means no credentials live on the Pi, and
 the pulled copy doubles as the off-Pi **backup** — on ZFS with snapshots, replacing

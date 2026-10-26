@@ -9,9 +9,10 @@ serial/USB port and **Python 3.10+**. There are three ways to run it:
 | Raspberry Pi | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
 | **Pi + analysis server** (this station since 2026-10) | the Pi | an always-on box with more RAM, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
 
-The split exists because acquisition stays tiny forever, but the nightly rebuild
-processes the *whole* record and grows with it. On a 1 GB Pi it ran out of memory
-after about six months of data.
+The split started as a necessity: the nightly rebuild's memory grew with the record,
+and in October 2026 it outgrew this station's 1 GB Pi. That's fixed (see "What a
+1 GB Pi can carry" below), so a Pi can again run everything. An analysis server is
+still the more robust setup, with off-box backups and a faster rebuild.
 
 ## 1. Get the code
 
@@ -129,15 +130,20 @@ acquiring with **no login required**, so it rides through power cuts and updates
 would strand the Windows box (see "Surviving reboots" above). This station runs a
 **Pi 3B+ (1 GB)**.
 
-**What a 1 GB Pi can carry.** Acquisition, the status page, the TFT and the backup are
-light and stay that way. The nightly analysis + site rebuild is not: it covers the whole
-record, so its memory need grows with the archive. With `--swap`, a 1 GB Pi coped until
-the archive held about six months of data. By October 2026 the rebuild wanted ~1.3 GB,
-and it took the Pi down three nights running. Acquisition stayed healthy throughout. So
-run everything on the Pi to start, and plan to move the analysis to a bigger machine
-([deploy/truenas/README.md](deploy/truenas/README.md)) before then. With the analysis
-moved, the Pi needs no `--dashboard` and holds no push credentials. A Pi 4 would only
-postpone the problem.
+**What a 1 GB Pi can carry.** All of it. With acquisition, the status page and the TFT
+running, this station's Pi uses ~235 MB in total. The nightly analysis + site rebuild covers the whole
+record. It used to load the whole PSD grid and copy it a dozen times, so its memory
+grew ~2.4 GB per year of record. In October 2026 it outgrew this station's Pi and took
+it down three nights running. Now the grid cache is memory-mapped (`grid_full.npz`
+plus a `grid_full.psd.f32` sidecar of float32 rows) and the rebuild streams over it a
+block of hours at a time. Its peak is ~300–350 MB whether the record is three months or
+seven years long. That was measured inside a 1 GB container with no swap. What still
+grows is **time** (about a minute per year of record on a desktop CPU, several times
+that on a Pi) and the grid file on disk (~110 MB per year).
+
+You can still move the analysis to a bigger always-on machine
+([deploy/truenas/README.md](deploy/truenas/README.md)) for backups and speed. With it
+moved, the Pi needs no `--dashboard` and holds no push credentials.
 
 **Distro:** flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. This
 station runs Trixie, and Bookworm works too.
@@ -175,12 +181,13 @@ sudo systemctl restart infra-acquire     # after editing config.toml
 
 ### `--swap` — keep the analysis from OOM-ing (do this on a 1 GB Pi)
 
-The analysis step (PPSD, wide-range renders) can exceed 1 GB of RAM and get OOM-killed.
-`--swap` bumps the swapfile to 2 GB so it completes — slower, but it finishes. The design
-already helps: `psd.py` keeps an incremental grid cache, so each nightly run only
-processes the *new* hours and the pages render from the cached grid, not the raw archive.
-Swap only buys time, though. Rendering still loads the whole grid, so see "What a 1 GB
-Pi can carry" above. An acquisition-only Pi doesn't need `--swap`.
+The nightly rebuild now peaks at ~300–350 MB (see "What a 1 GB Pi can carry" above),
+so on a 1 GB Pi swap is a safety margin rather than a requirement. It also covers the
+ad-hoc tools, which are not streamed: `tools/analyze.py` (a PPSD from the raw
+archive), and the standalone `tools/report.py` and `tools/tonehunt.py`, which compute
+full-resolution tone residuals. `--swap` bumps the swapfile to 2 GB. Each nightly
+run only processes the *new* hours, appending them to the grid cache in place. An
+acquisition-only Pi doesn't need `--swap`.
 
 ### `--display` — Mini PiTFT 1.14" status screen
 

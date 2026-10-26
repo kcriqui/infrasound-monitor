@@ -2,11 +2,27 @@
 
 For each UTC hour in a date range we compute a Welch power spectral density in
 pressure units (Pa^2/Hz).  The result is a ``time x frequency`` grid that the
-waterfall renderer draws directly.  Grids are cached to ``.npz`` so re-rendering
-a date range is instant.
+waterfall renderer draws directly.  Grids are cached so re-rendering a date
+range is instant.
+
+Cache layout -- two files, so the nightly job's memory does not grow with the
+record:
+
+  grid_full.npz       times, freqs and metadata (small)
+  grid_full.psd.f32   the PSD rows: raw little-endian float32, one row per hour
+
+``load_grid`` memory-maps the rows instead of reading them, and ``append_grid``
+adds new hours to the end of the file in place.  Pages of a read-only map are
+clean and file-backed, so the kernel can drop them under pressure instead of
+swapping -- a multi-year grid costs the reader only the block it is looking at.
+float32 is ~1e-6 dB of precision, far below anything the analysis resolves.
+
+A cache written before this layout (``psd_db`` inside the ``.npz``) still loads,
+fully into memory, and is converted on its next ``save_grid``/``append_grid``.
 """
 from __future__ import annotations
 import datetime as dt
+import os
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +33,8 @@ from obspy.clients.filesystem.sds import Client
 from .config import (StationConfig, DEFAULT_STATION, PA_PER_COUNT, PASSBAND_HZ)
 
 SECONDS_PER_HOUR = 3600
+GRID_DTYPE = np.dtype("<f4")          # on-disk PSD rows (dB)
+CHUNK_HOURS = 256                     # rows per block for streaming passes over a grid
 
 
 def _hour_range(start: dt.datetime, end: dt.datetime):
@@ -83,9 +101,12 @@ def update_grid(cache, archive, cfg: StationConfig = DEFAULT_STATION,
     rebuild fast.  Returns (grid, n_new_hours).  Falls back to a full recompute
     if the frequency axis somehow changed.
     """
-    grid = load_grid(cache)
-    times = list(grid["times"])
-    freqs = grid["freqs"]
+    meta = _load_meta(cache)
+    if "psd_db" in meta:            # legacy single-file cache: convert it once
+        save_grid(meta, cache)
+        meta = _load_meta(cache)
+    times = list(meta["times"])
+    freqs = meta["freqs"]
     end = end or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     end = end.replace(minute=0, second=0, microsecond=0)
     new_start = times[-1] + dt.timedelta(hours=1)
@@ -93,39 +114,160 @@ def update_grid(cache, archive, cfg: StationConfig = DEFAULT_STATION,
     if not new_hours:
         if verbose:
             print("grid already current")
-        return grid, 0
+        return load_grid(cache), 0
     try:
         ng = compute_grid(archive, new_start, end, cfg, nperseg=nperseg, verbose=verbose)
         if len(ng["freqs"]) != len(freqs):
             if verbose:
                 print("freq axis changed -> full recompute")
-            full = compute_grid(archive, dt.datetime.fromisoformat(str(grid["start"])),
-                                end, cfg, nperseg=nperseg, verbose=verbose)
-            save_grid(full, cache)
+            build_cache(cache, archive, dt.datetime.fromisoformat(str(meta["start"])),
+                        end, cfg, nperseg=nperseg, verbose=verbose)
+            full = load_grid(cache)
             return full, len(full["times"]) - len(times)
         new_times = list(ng["times"]); new_psd = ng["psd_db"]
     except RuntimeError:            # no data yet in the new window -> record as gaps
         new_times = new_hours
         new_psd = np.full((len(new_hours), len(freqs)), np.nan)
 
-    merged = dict(grid)
-    merged["times"] = np.array(times + list(new_times))
-    merged["psd_db"] = np.vstack([grid["psd_db"], new_psd])
-    merged["end"] = end.isoformat()
-    save_grid(merged, cache)
+    n = append_grid(cache, new_times, new_psd, end)
     if verbose:
-        print(f"appended {len(new_times)} hours -> grid now {merged['psd_db'].shape[0]} hours")
-    return merged, len(new_times)
+        print(f"appended {len(new_times)} hours -> grid now {n} hours")
+    return load_grid(cache), len(new_times)
+
+
+def build_cache(cache, archive, start: dt.datetime, end: dt.datetime,
+                cfg: StationConfig = DEFAULT_STATION, nperseg: int = 8192,
+                chunk_days: int = 30, verbose: bool = True) -> int:
+    """Compute a grid over [start, end) straight into a cache file, a month at a
+    time, so seeding a multi-year record never holds more than a month of rows.
+    Hours before the first data are kept as gap rows, as ``compute_grid`` does.
+    Returns the number of hours written."""
+    step = dt.timedelta(days=chunk_days)
+    pending = []                    # leading hours with no data: freqs not known yet
+    written = 0
+    t = start
+    while t < end:
+        t2 = min(t + step, end)
+        try:
+            g = compute_grid(archive, t, t2, cfg, nperseg=nperseg, verbose=verbose)
+        except RuntimeError:        # no data in this window
+            hours = [h.datetime for h in _hour_range(t, t2)]
+            if written:
+                written = append_grid(cache, hours, np.full((len(hours), nfreq), np.nan), t2)
+            else:
+                pending += hours
+            t = t2
+            continue
+        if not written:
+            nfreq = len(g["freqs"])
+            if pending:
+                g["times"] = np.array(pending + list(g["times"]))
+                g["psd_db"] = np.vstack([np.full((len(pending), nfreq), np.nan), g["psd_db"]])
+            g["start"] = start.isoformat()
+            save_grid(g, cache)
+            written = len(g["times"])
+        else:
+            if len(g["freqs"]) != nfreq:
+                raise RuntimeError(f"frequency axis changed at {t:%Y-%m-%d}")
+            written = append_grid(cache, list(g["times"]), g["psd_db"], t2)
+        t = t2
+    if not written:
+        raise RuntimeError("no data with >= nperseg samples found in range")
+    return written
+
+
+def _psd_path(path) -> Path:
+    return Path(path).with_suffix(".psd.f32")      # grid_full.npz -> grid_full.psd.f32
+
+
+def _replace_atomically(path: Path, write):
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        write(f)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _save_meta(meta: dict, path):
+    _replace_atomically(Path(path), lambda f: np.savez_compressed(f, **meta))
+
+
+def _load_meta(path) -> dict:
+    with np.load(path, allow_pickle=True) as d:
+        return {k: d[k] for k in d.files}
 
 
 def save_grid(grid: dict, path):
+    """Write a whole grid: rows to the sidecar, everything else to the ``.npz``.
+    Rows are written a block at a time, so saving a memory-mapped grid stays cheap."""
+    path = Path(path)
     # Ensure the parent dir exists (e.g. a fresh clone has no analysis/ -- it's gitignored).
-    parent = Path(path).parent
-    if parent and not parent.exists():
-        parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **grid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    psd = grid["psd_db"]
+
+    def write_rows(f):
+        for lo in range(0, len(psd), CHUNK_HOURS):
+            f.write(np.ascontiguousarray(psd[lo:lo + CHUNK_HOURS], dtype=GRID_DTYPE).tobytes())
+
+    # Rows first, then the metadata that says how many there are: a crash between
+    # the two leaves extra rows, which load_grid ignores and append_grid trims.
+    _replace_atomically(_psd_path(path), write_rows)
+    _save_meta({k: v for k, v in grid.items() if k != "psd_db"}, path)
+
+
+def append_grid(path, new_times, new_psd, end: dt.datetime) -> int:
+    """Append hours to a cache in place.  Returns the new row count."""
+    path = Path(path)
+    meta = _load_meta(path)
+    if "psd_db" in meta:
+        save_grid(meta, path)
+        meta = _load_meta(path)
+    n_old, nfreq = len(meta["times"]), len(meta["freqs"])
+    new_psd = np.ascontiguousarray(new_psd, dtype=GRID_DTYPE)
+    if new_psd.shape != (len(new_times), nfreq):
+        raise ValueError(f"rows {new_psd.shape} do not match {len(new_times)} hours x {nfreq} freqs")
+    with open(_psd_path(path), "r+b") as f:
+        f.truncate(n_old * nfreq * GRID_DTYPE.itemsize)   # drop rows of an interrupted append
+        f.seek(0, os.SEEK_END)
+        f.write(new_psd.tobytes())
+        f.flush(); os.fsync(f.fileno())
+    meta["times"] = np.array(list(meta["times"]) + list(new_times))
+    meta["end"] = end.isoformat()
+    _save_meta(meta, path)
+    return len(meta["times"])
 
 
 def load_grid(path) -> dict:
-    d = np.load(path, allow_pickle=True)
-    return {k: d[k] for k in d.files}
+    """Load a cached grid; ``psd_db`` is a read-only memory map of the rows."""
+    grid = _load_meta(path)
+    if "psd_db" in grid:            # legacy single-file cache
+        return grid
+    n, nfreq = len(grid["times"]), len(grid["freqs"])
+    side = _psd_path(path)
+    need = n * nfreq * GRID_DTYPE.itemsize
+    have = side.stat().st_size if side.exists() else -1
+    if have < need:
+        raise ValueError(f"{side} holds {max(have, 0)} bytes; {n} hours x {nfreq} freqs "
+                         f"need {need} -- the cache is damaged, rebuild it")
+    grid["psd_db"] = (np.memmap(side, dtype=GRID_DTYPE, mode="r", shape=(n, nfreq))
+                      if n else np.empty((0, nfreq), GRID_DTYPE))
+    return grid
+
+
+def iter_blocks(psd, rows=None, chunk: int = CHUNK_HOURS):
+    """Yield (lo, hi, block) over a grid's rows, each block a float64 copy.  The
+    way to make one pass over a memory-mapped grid without materialising it.
+    ``rows`` (a boolean mask) skips blocks that contain no selected row."""
+    for lo in range(0, len(psd), chunk):
+        hi = min(lo + chunk, len(psd))
+        if rows is not None and not rows[lo:hi].any():
+            continue
+        yield lo, hi, np.asarray(psd[lo:hi], dtype=float)
+
+
+def have_mask(psd) -> np.ndarray:
+    """Hours whose whole spectrum is finite (i.e. not a data gap)."""
+    out = np.zeros(len(psd), dtype=bool)
+    for lo, hi, blk in iter_blocks(psd):
+        out[lo:hi] = np.isfinite(blk).all(axis=1)
+    return out

@@ -19,6 +19,7 @@ Reuse the same ``--cache`` grid that ``infra-waterfall`` builds to render instan
 from __future__ import annotations
 import argparse
 import datetime as dt
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,7 @@ import matplotlib.dates as mdates
 from scipy.ndimage import median_filter
 
 from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
-from infrasound_monitor.psd import compute_grid, save_grid, load_grid
+from infrasound_monitor.psd import compute_grid, save_grid, load_grid, iter_blocks
 
 
 def _parse_date(s: str) -> dt.datetime:
@@ -60,7 +61,11 @@ def quiet_window(times, freqs, psd, have, nhours: int):
     """
     hours_utc = np.array([t.hour for t in times])
     band = (freqs >= 1) & (freqs <= 20)
-    level = np.nanmedian(psd[:, band], axis=1)
+    level = np.full(len(times), np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)     # gap hours -> NaN
+        for lo, hi, blk in iter_blocks(psd, have):
+            level[lo:hi] = np.nanmedian(blk[:, band], axis=1)
     diurnal = np.array([np.nanmedian(level[(hours_utc == h) & have])
                         if ((hours_utc == h) & have).any() else np.nan
                         for h in range(24)])
@@ -93,6 +98,48 @@ def night_dates_matrix(times, resid, have, night_hours):
             out[idx[d]] = np.nanmean(np.vstack(rows), axis=0)
     day_dt = [dt.datetime(d.year, d.month, d.day) for d in udates]
     return out, day_dt, nmask
+
+
+def night_day_stats(times, freqs, psd, have, night_hours, baseline_hz=1.0, thr=6.0):
+    """Night-only waterfall plus night/day tone persistence, in one streaming pass.
+
+    Gives the same results as ``tone_residual`` + ``night_dates_matrix`` + the
+    ``resid > thr`` fractions, but works a block of hours at a time, so memory is
+    set by the block and the number of nights rather than the length of the
+    record.  (The residual is per hour -- the median filter spans frequency only --
+    so a block computes exactly what the whole grid would.)
+
+    Returns (night_wf, day_dt, nmask, pn, pd): pn/pd are, per frequency, the
+    fraction of night/day data hours more than ``thr`` dB above background."""
+    anchor = night_hours[0]
+    hours_utc = np.array([t.hour for t in times])
+    nmask = np.isin(hours_utc, night_hours) & have
+    dmask = have & ~nmask
+    labels = [(t - dt.timedelta(hours=anchor)).date() for t in times]
+    udates = sorted({labels[i] for i in np.flatnonzero(nmask)})
+    idx = {d: k for k, d in enumerate(udates)}
+    nfreq = len(freqs)
+    # One row per night, so this is the one thing here that grows with the record
+    # (~4.6 MB/year as float32).  nmask hours have a fully finite spectrum, so the
+    # residual is finite too and one count per night serves every frequency.
+    nsum = np.zeros((len(udates), nfreq), dtype=np.float32)
+    ncnt = np.zeros(len(udates))
+    n_above = np.zeros(nfreq)
+    d_above = np.zeros(nfreq)
+    for lo, hi, blk in iter_blocks(psd, have):
+        resid, _ = tone_residual(blk, freqs, baseline_hz)
+        nm, dm = nmask[lo:hi], dmask[lo:hi]
+        n_above += (resid[nm] > thr).sum(axis=0)
+        d_above += (resid[dm] > thr).sum(axis=0)
+        for i in np.flatnonzero(nm):
+            k = idx[labels[lo + i]]
+            nsum[k] += resid[i]
+            ncnt[k] += 1
+    night_wf = nsum / ncnt[:, None].astype(np.float32)   # in place of a float64 copy
+    pn = n_above / nmask.sum() if nmask.any() else np.zeros(nfreq)
+    pd_ = d_above / dmask.sum() if dmask.any() else np.zeros(nfreq)
+    day_dt = [dt.datetime(d.year, d.month, d.day) for d in udates]
+    return night_wf, day_dt, nmask, pn, pd_
 
 
 def render(times, freqs, resid, out_png: Path, seed: str, vmax: float):

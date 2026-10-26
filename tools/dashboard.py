@@ -25,6 +25,8 @@ import matplotlib.dates as mdates
 import report          # sibling tool (tools/ is on sys.path when run as a script)
 import tonehunt        # sibling tool
 from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
+from infrasound_monitor.psd import build_cache, load_grid, have_mask
+from infrasound_monitor.waterfall import _decimate_time
 
 plt.rcParams.update({"font.size": 10, "axes.titlesize": 11, "figure.facecolor": "white"})
 
@@ -38,7 +40,29 @@ def _parse_date(s):
     raise argparse.ArgumentTypeError(f"bad date: {s}")
 
 
+# The full-record image is ~1300 x 460 px, so drawing more columns or rows than
+# this only feeds matplotlib's resampler.  Reducing first keeps the render's
+# memory fixed however long the record grows.
+IMG_MAX_COLS = 1600
+IMG_MAX_ROWS = 800
+
+
+def _downsample_freq(freqs, img, max_rows):
+    """Average groups of adjacent frequency bins, to <= max_rows.  A plain mean of
+    the plotted values -- what imshow's antialiasing did with the full array --
+    so the image looks as before; averaging in power instead would brighten
+    the noise and change what a faint line looks like."""
+    k = int(np.ceil(len(freqs) / max_rows))
+    if k <= 1:
+        return freqs, img
+    n = len(freqs) // k * k                    # drop a ragged top end (< k bins)
+    out = np.asarray(img[:, :n], float).reshape(len(img), -1, k).mean(axis=2)
+    return freqs[:n].reshape(-1, k).mean(axis=1), out
+
+
 def _fig_waterfall(times, freqs, psd):
+    times, psd = _decimate_time(times, psd, IMG_MAX_COLS)
+    freqs, psd = _downsample_freq(freqs, psd, IMG_MAX_ROWS)
     Z = psd.T
     fin = Z[np.isfinite(Z)]
     vmin, vmax = np.percentile(fin, [5, 99]) if fin.size else (-60, -10)
@@ -54,7 +78,9 @@ def _fig_waterfall(times, freqs, psd):
 
 
 def _fig_nightly(day_dt, freqs, night_wf, label):
-    xnum = mdates.date2num(day_dt)
+    day_dt, night_wf = _decimate_time(np.array(day_dt, dtype=object), night_wf, IMG_MAX_COLS)
+    freqs, night_wf = _downsample_freq(freqs, night_wf, IMG_MAX_ROWS)
+    xnum = mdates.date2num(list(day_dt))
     fig, ax = plt.subplots(figsize=(12, 4.6))
     im = ax.imshow(night_wf.T, origin="lower", aspect="auto",
                    extent=[xnum[0], xnum[-1], float(freqs.min()), float(freqs.max())],
@@ -67,25 +93,24 @@ def _fig_nightly(day_dt, freqs, night_wf, label):
 
 def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
           baseline_hz=1.0, night_window=5, utc_offset=UTC_OFFSET_HOURS):
-    grid = (report.load_grid(cache) if (cache and Path(cache).exists())
-            else report.compute_grid(archive, start, end, cfg, nperseg=nperseg))
+    # Everything below works a block of hours at a time on the (memory-mapped)
+    # grid, so this page's memory does not grow with the record.
     if cache and not Path(cache).exists():
-        report.save_grid(grid, cache)
+        build_cache(cache, archive, start, end, cfg, nperseg=nperseg)
+    grid = (load_grid(cache) if cache
+            else report.compute_grid(archive, start, end, cfg, nperseg=nperseg))
     times = list(grid["times"]); freqs = np.asarray(grid["freqs"], float)
-    psd = np.asarray(grid["psd_db"], float)
-    have = np.isfinite(psd).all(axis=1)
-    resid, _ = tonehunt.tone_residual(psd, freqs, baseline_hz)
+    psd = grid["psd_db"]
+    have = have_mask(psd)
 
     # night analysis
+    thr = 6.0
     night_hours, _ = tonehunt.quiet_window(times, freqs, psd, have, night_window)
-    night_wf, day_dt, nmask = tonehunt.night_dates_matrix(times, resid, have, night_hours)
+    night_wf, day_dt, nmask, pn, pd_ = tonehunt.night_day_stats(
+        times, freqs, psd, have, night_hours, baseline_hz, thr)
     loc = [int((h + utc_offset) % 24) for h in night_hours]
     night_label = (f"{night_hours[0]:02d}:00–{(night_hours[-1]+1)%24:02d}:00 UTC "
                    f"· ~{min(loc):02d}:00–{(max(loc)+1)%24:02d}:00 local")
-    thr = 6.0
-    pn = np.mean(resid[nmask] > thr, axis=0) if nmask.any() else np.zeros(len(freqs))
-    dmask = have & ~nmask
-    pd_ = np.mean(resid[dmask] > thr, axis=0) if dmask.any() else np.zeros(len(freqs))
     peak_pct = float(pn.max() * 100) if pn.size else 0.0
     diff = pn - pd_
     top = sorted(np.argsort(diff)[::-1][:6], key=lambda k: freqs[k])
@@ -93,7 +118,7 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
 
     av = report.availability(times, have)
     pdf = report.pdf_psd(freqs, psd, have)
-    bands = report.band_stats(freqs, psd, have)
+    bands = report.band_stats(freqs, med=pdf["p50"])
     meta = _station_meta(archive)
 
     imgs = dict(waterfall=_fig_waterfall(times, freqs, psd),

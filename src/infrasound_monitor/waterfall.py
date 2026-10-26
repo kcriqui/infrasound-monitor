@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import StationConfig, DEFAULT_STATION
-from .psd import compute_grid, save_grid, load_grid
+from .psd import compute_grid, build_cache, load_grid
 
 
 def _logbin_freq(freqs, psd_db, nbins):
@@ -84,7 +84,7 @@ def render_waterfall(grid: dict, out_html, title: str | None = None,
 
     times = grid["times"]
     freqs = np.asarray(grid["freqs"], dtype=float)
-    psd_db = np.asarray(grid["psd_db"], dtype=float)         # [ntime, nfreq]
+    psd_db = grid["psd_db"]              # [ntime, nfreq]; may be a memory map -- don't copy it
     # Decimate time *before* log-binning frequency: _logbin_freq materialises the
     # grid in linear power, so shrinking the time axis first bounds that peak.
     ntime0 = psd_db.shape[0]
@@ -125,10 +125,12 @@ def build(archive, start: dt.datetime, end: dt.datetime, out_html,
     if cache and Path(cache).exists():
         print(f"loading cached grid {cache}")
         grid = load_grid(cache)
+    elif cache:
+        build_cache(cache, archive, start, end, cfg, nperseg=nperseg)
+        print(f"cached grid -> {cache}")
+        grid = load_grid(cache)
     else:
         grid = compute_grid(archive, start, end, cfg, nperseg=nperseg)
-        if cache:
-            save_grid(grid, cache); print(f"cached grid -> {cache}")
     path = render_waterfall(grid, out_html, max_cols=max_cols)
     print(f"wrote {path}")
     return path

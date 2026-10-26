@@ -71,7 +71,9 @@ infra-waterfall "C:/Users/you/infra-archive" \
 
 Produces a **self-contained interactive HTML** (open in any browser, no server): time ×
 frequency, PSD in dB (Pa²/Hz). `--cache` stores the hourly PSD grid so re-rendering is
-instant. This is the display for **before/after comparison** (e.g. a datacenter appearing
+instant. That's two files, `grid.npz` (times, frequencies) and `grid.psd.f32` (float32
+rows, memory-mapped on load and appended to in place). Rendering the waterfall and
+dashboard from it streams over the rows, so memory stays flat as the record grows. This is the display for **before/after comparison** (e.g. a datacenter appearing
 as a new persistent horizontal line).
 
 Drag on the plot to zoom into a date range, use the **range slider** under the x axis to

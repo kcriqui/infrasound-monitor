@@ -31,7 +31,7 @@ from scipy.ndimage import median_filter
 
 from obspy import read_inventory
 from infrasound_monitor.config import StationConfig, DEFAULT_STATION, P_REF_PA
-from infrasound_monitor.psd import compute_grid, save_grid, load_grid
+from infrasound_monitor.psd import compute_grid, save_grid, load_grid, iter_blocks, have_mask
 
 
 def _parse_date(s):
@@ -80,18 +80,68 @@ def availability(times, have):
                 total_gap_h=total_gap_h, longest_gap_h=longest, img=_fig_b64(fig))
 
 
+# Fine histogram of hourly PSD per frequency, accumulated a block of hours at a
+# time -- the PDF-PSD and the percentiles both come from it, so neither needs the
+# whole record in memory.  0.1 dB bins put the percentiles within ~0.05 dB of the
+# exact order statistic, well below the 1 dB the PDF is drawn at.  Values outside
+# the range land in the end bins (they only nudge a percentile that is already
+# off the plot); the PDF itself only counts -100..+20 dB, as before.
+HIST_LO, HIST_HI, HIST_STEP = -140.0, 20.0, 0.1
+PDF_LO, PDF_HI = -100.0, 20.0
+
+
+def psd_histogram(psd, have):
+    """Counts [nbins, nfreq] of data-hour PSD values in HIST_STEP-dB bins."""
+    nb = int(round((HIST_HI - HIST_LO) / HIST_STEP))
+    nfreq = psd.shape[1]
+    counts = np.zeros(nb * nfreq, dtype=np.int64)
+    col = np.arange(nfreq)
+    for lo, hi, blk in iter_blocks(psd, have):
+        blk = blk[have[lo:hi]]
+        ok = np.isfinite(blk)
+        b = np.clip(np.floor((blk - HIST_LO) / HIST_STEP), 0, nb - 1).astype(np.int64)
+        counts += np.bincount((b * nfreq + col)[ok], minlength=nb * nfreq)
+    return counts.reshape(nb, nfreq)
+
+
+def hist_percentiles(counts, pcts):
+    """Percentiles per column of a HIST_STEP histogram, by numpy's 'linear'
+    definition: interpolate between the order statistics either side of rank
+    p/100*(n-1).  Each order statistic is placed within its bin as if the bin's
+    values were spread evenly across it, so each is within one bin of exact.
+    Columns with no data come out NaN."""
+    cum = np.cumsum(counts, axis=0)
+    n = cum[-1]
+    cols = np.arange(len(n))
+
+    def order_stat(j):                               # estimated j-th smallest (0-based)
+        b = np.argmax(cum > j, axis=0)               # bin holding rank j
+        below = np.where(b > 0, cum[np.maximum(b - 1, 0), cols], 0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return HIST_LO + HIST_STEP * (b + (j - below + 0.5) / counts[b, cols])
+
+    out = []
+    for p in pcts:
+        r = p / 100.0 * np.maximum(n - 1, 0)         # 0-based rank of the percentile
+        j0 = np.floor(r)
+        j1 = np.minimum(j0 + 1, np.maximum(n - 1, 0))
+        v0, v1 = order_stat(j0), order_stat(j1)
+        out.append(np.where(n > 0, v0 + (r - j0) * (v1 - v0), np.nan))
+    return out
+
+
 def pdf_psd(freqs, psd, have):
     """PDF-PSD (probability density of hourly PSD vs frequency) + percentiles."""
-    data = psd[have]
-    db_edges = np.arange(-100, 21, 1.0)
-    db_cent = 0.5 * (db_edges[:-1] + db_edges[1:])
-    pdf = np.zeros((len(db_cent), len(freqs)))
-    for j in range(len(freqs)):
-        c, _ = np.histogram(data[:, j], bins=db_edges)
-        s = c.sum()
-        if s:
-            pdf[:, j] = 100.0 * c / s
-    p10, p50, p90 = np.nanpercentile(data, [10, 50, 90], axis=0)
+    counts = psd_histogram(psd, have)
+    k = int(round(1.0 / HIST_STEP))                  # fine bins per 1 dB PDF bin
+    i0 = int(round((PDF_LO - HIST_LO) / HIST_STEP))
+    i1 = int(round((PDF_HI - HIST_LO) / HIST_STEP))
+    coarse = counts[i0:i1].reshape(-1, k, counts.shape[1]).sum(axis=1)
+    db_cent = PDF_LO + 0.5 + np.arange(coarse.shape[0])
+    s = coarse.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pdf = np.where(s > 0, 100.0 * coarse / s, 0.0)
+    p10, p50, p90 = hist_percentiles(counts, [10, 50, 90])
     fig, ax = plt.subplots(figsize=(11, 5.5))
     pdf_m = np.ma.masked_equal(pdf, 0.0)
     vmax = np.percentile(pdf[pdf > 0], 98) if (pdf > 0).any() else 5
@@ -136,9 +186,11 @@ def tone_view(times, freqs, psd, have, baseline_hz=1.0, thr=6.0, vmax=8.0):
     return dict(img=_fig_b64(fig), rows=rows, peak_pct=peak_pct, thr=thr)
 
 
-def band_stats(freqs, psd, have):
-    data = psd[have]
-    med = np.nanmedian(data, axis=0)                 # median PSD per freq (dB)
+def band_stats(freqs, psd=None, have=None, med=None):
+    """Per-band noise levels from the median-hour spectrum.  Pass ``med`` (e.g.
+    ``pdf_psd(...)["p50"]``) to reuse it; otherwise it is computed from the grid."""
+    if med is None:
+        med = hist_percentiles(psd_histogram(psd, have), [50])[0]   # median PSD per freq (dB)
     df = float(np.median(np.diff(freqs)))
     bands = [(0.05, 0.5), (0.5, 5.0), (5.0, 20.0), (0.05, 20.0)]
     out = []
@@ -165,8 +217,8 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
         if cache:
             save_grid(grid, cache)
     times = list(grid["times"]); freqs = np.asarray(grid["freqs"], float)
-    psd = np.asarray(grid["psd_db"], float)
-    have = np.isfinite(psd).all(axis=1)
+    psd = grid["psd_db"]                 # may be a memory map; the stats stream over it
+    have = have_mask(psd)
 
     # station metadata
     meta = {}
@@ -185,7 +237,7 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
     av = availability(times, have)
     pdf = pdf_psd(freqs, psd, have)
     tone = tone_view(times, freqs, psd, have, baseline_hz=baseline_hz)
-    bands = band_stats(freqs, psd, have)
+    bands = band_stats(freqs, med=pdf["p50"])
 
     html = _render_html(cfg, start, end, meta, av, pdf, tone, bands, grid)
     Path(out_html).parent.mkdir(parents=True, exist_ok=True)

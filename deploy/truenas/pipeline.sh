@@ -76,6 +76,14 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
+# Pull-only: the NAS is just the snapshotted off-Pi backup, and the Pi rebuilds
+# and publishes for itself. Building here as well would only be a second site
+# going stale alongside the real one.
+if [ "${INFRA_PULL_ONLY:-0}" = "1" ]; then
+    echo "$(ts) [done] pull-only -- no rebuild or publish"
+    exit 0
+fi
+
 # ---- 2. rebuild ------------------------------------------------------------
 echo "$(ts) [build] refresh.py"
 python tools/refresh.py "$DATA/archive" --cache "$CACHE" --out-dir "$SITE"

@@ -1,11 +1,10 @@
 # infrasound-monitor
 
-### 🌊 [**Live dashboard → truenas-scale.tail4c32e5.ts.net:8443**](https://truenas-scale.tail4c32e5.ts.net:8443/)
+### 🌊 [**Live dashboard → kcriqui.github.io/infrasound-monitor-site**](https://kcriqui.github.io/infrasound-monitor-site/)
 
-Rebuilt daily at 06:15 Pacific: spectral waterfall, long-term noise (PDF-PSD), data
-availability, and a night-only persistent-tone hunt for datacenter noise. Mirrored to
-[kcriqui.github.io/infrasound-monitor-site](https://kcriqui.github.io/infrasound-monitor-site/),
-which stays up if the home connection does not.
+Rebuilt daily at 06:15 Pacific on the station's Raspberry Pi: spectral waterfall,
+long-term noise (PDF-PSD), data availability, and a night-only persistent-tone hunt for
+datacenter noise.
 
 ---
 
@@ -19,9 +18,10 @@ data in a nonstandard hourly `.Z` format with no embedded calibration. Here the 
 is calibrated, self-describing, and portable.
 
 > **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)**: a Raspberry Pi
-> for acquisition (`deploy/setup.sh`), or a single Windows PC (`deploy\setup.ps1`). For a
-> long-running station, move the nightly analysis to a bigger always-on box; this
-> station's is a TrueNAS server ([deploy/truenas/README.md](deploy/truenas/README.md)).
+> (`deploy/setup.sh`), which runs everything including the nightly analysis even with
+> 1 GB, or a single Windows PC (`deploy\setup.ps1`). Optionally, an always-on server can
+> pull the archive as a snapshotted backup, or take over the analysis
+> ([deploy/truenas/README.md](deploy/truenas/README.md)).
 
 ## Why these formats
 
@@ -220,7 +220,7 @@ python tools/transients.py "C:/Users/you/infra-archive" \
 - [x] Live acquisition daemon (`infra-acquire`) — framing hardware-verified; auto-start service
 - [x] AmaSeis-style live drum viewer (`tools/live.py`)
 - [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
-- [x] Public, auto-updating dashboard (self-hosted over Tailscale Funnel, mirrored to GitHub Pages)
+- [x] Public, auto-updating dashboard (GitHub Pages), rebuilt on a 1 GB Pi in flat memory
 - [x] Turnkey deploy: Windows, Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
       and a TrueNAS SCALE analysis stack that pulls from the Pi (`deploy/truenas/`)
 - [ ] One-command before/after comparison for when the datacenter energises

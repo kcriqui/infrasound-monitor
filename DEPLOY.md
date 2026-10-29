@@ -6,8 +6,8 @@ serial/USB port and **Python 3.10+**. There are three ways to run it:
 | Setup | Acquires | Analyses + publishes | Guide |
 |---|---|---|---|
 | Single Windows PC | the PC | the PC | sections 1–6 below |
-| Raspberry Pi | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
-| **Pi + analysis server** (this station since 2026-10) | the Pi | an always-on box with more RAM, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
+| **Raspberry Pi** (this station; a server pulls the archive as a backup) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
+| Pi + analysis server (this station, Oct 10–29 2026) | the Pi | an always-on box, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
 
 The split started as a necessity: the nightly rebuild's memory grew with the record,
 and in October 2026 it outgrew this station's 1 GB Pi. That's fixed (see "What a

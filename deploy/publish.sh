@@ -53,6 +53,10 @@ if [ -d "$SITE_DIR/.git" ]; then
     else
         echo "$(ts)  [publish] rebuilt; no git remote (skipped push)" >> "$LOG"
     fi
+    # Each amend orphans the previous night's ~11 MB of pages, and the reflog
+    # keeps every one alive: by October this clone held 535 MB of dead site
+    # versions on the SD card. Keep only what the single commit needs.
+    git reflog expire --expire=now --all && git prune --expire=now
 else
     echo "$(ts)  [publish] rebuilt -> $SITE_DIR (git not set up; local only)" >> "$LOG"
 fi

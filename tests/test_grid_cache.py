@@ -127,6 +127,19 @@ def test_update_grid_appends_only_new_hours(tmp_path, monkeypatch):
     assert n_new == 0
 
 
+def test_first_archive_day_finds_the_earliest_sds_file(tmp_path):
+    import refresh
+    from infrasound_monitor.config import DEFAULT_STATION as cfg
+    from infrasound_monitor.convert import sds_path
+    assert refresh.first_archive_day(tmp_path, cfg) is None
+    for year, jday in ((2026, 216), (2025, 300), (2026, 1)):
+        p = sds_path(tmp_path, cfg, year, jday)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    (p.parent / (p.name + ".tmp")).touch()               # not a day file
+    assert refresh.first_archive_day(tmp_path, cfg) == dt.datetime(2025, 10, 27)
+
+
 # ------------------------------------------------- streaming == whole-grid ----
 def _with_gaps_and_a_tone(n=24 * 40, nfreq=200):
     g = _grid(n, nfreq=nfreq, seed=3)

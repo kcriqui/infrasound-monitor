@@ -11,7 +11,7 @@ It writes a PNG (time x frequency, "dB above local background") and prints a
 ranked list of the most persistent narrowband frequencies, so the answer is both
 visual and quantitative.
 
-    python tools/tonehunt.py "C:/Users/you/infra-archive" \
+    python tools/tonehunt.py archive \
         --start 2026-04-09 --end 2026-07-12 --cache analysis/grid_full.npz
 
 Reuse the same ``--cache`` grid that ``infra-waterfall`` builds to render instantly.

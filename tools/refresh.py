@@ -3,10 +3,13 @@
 
 Intended for a daily scheduled run.  Incrementally appends new hours to the grid
 cache (fast), then regenerates the dashboard (index.html) and the interactive
-waterfall into an output directory ready to publish to a static host.
+waterfall into an output directory (deploy/publish.sh serves it from site/).
 
-    python tools/refresh.py "C:/Users/you/infra-archive" \
-        --cache analysis/grid_full.npz --out-dir C:/Users/you/infra-site
+    python tools/refresh.py                  # archive, cache and site/ from config.toml
+    python tools/refresh.py ~/infra-archive --cache analysis/grid_full.npz --out-dir site
+
+On the first run the cache doesn't exist yet, so it is seeded from ``--start`` (or
+the archive's first day file) up to now.
 """
 from __future__ import annotations
 import argparse
@@ -15,7 +18,7 @@ from pathlib import Path
 
 from infrasound_monitor.config import (StationConfig, DEFAULT_STATION,
                                         ARCHIVE_DIR, PROJECT_ROOT)
-from infrasound_monitor.psd import update_grid
+from infrasound_monitor.psd import build_cache, update_grid
 from infrasound_monitor import waterfall
 import dashboard          # tools/ sibling (tools is on sys.path when run as a script)
 
@@ -27,6 +30,8 @@ def main(argv=None):
                    help="PSD grid .npz to extend (default: <project>/analysis/grid_full.npz)")
     p.add_argument("--out-dir", default=None,
                    help="output dir for index.html + waterfall_full.html (default: <project>/site)")
+    p.add_argument("--start", default=None,
+                   help="seed a missing cache from this date, YYYY-MM-DD (default: first archive day)")
     p.add_argument("--nperseg", type=int, default=8192)
     p.add_argument("--network", default=DEFAULT_STATION.network)
     p.add_argument("--station", default=DEFAULT_STATION.station)
@@ -41,7 +46,18 @@ def main(argv=None):
 
     cache = Path(a.cache)
     if not cache.exists():
-        raise SystemExit(f"cache {cache} not found -- build it once with infra-waterfall --cache first")
+        seed = (dt.datetime.fromisoformat(a.start) if a.start
+                else first_archive_day(Path(archive), cfg))
+        if seed is None:
+            raise SystemExit(f"no data in {archive} yet -- nothing to build")
+        now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None, minute=0, second=0,
+                                                         microsecond=0)
+        print(f"[{dt.datetime.now():%Y-%m-%d %H:%M}] seeding {cache.name} from {seed:%Y-%m-%d} ...")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            build_cache(cache, archive, seed, now, cfg, nperseg=a.nperseg)
+        except RuntimeError as e:   # e.g. less than one PSD window recorded so far
+            raise SystemExit(f"can't seed the grid yet: {e}")
 
     print(f"[{dt.datetime.now():%Y-%m-%d %H:%M}] refreshing {cache.name} ...")
     grid, n_new = update_grid(cache, archive, cfg, nperseg=a.nperseg)
@@ -54,6 +70,18 @@ def main(argv=None):
     dashboard.build(archive, start, end, out / "index.html", cfg, cache=str(cache),
                     nperseg=a.nperseg)
     print(f"[{dt.datetime.now():%Y-%m-%d %H:%M}] done (+{n_new} new hours) -> {out}")
+
+
+def first_archive_day(archive: Path, cfg: StationConfig):
+    """Midnight UTC of the earliest SDS day file for this channel, or None."""
+    sid = f"{cfg.network}.{cfg.station}.{cfg.location}.{cfg.channel}"
+    files = archive.glob(f"*/{cfg.network}/{cfg.station}/{cfg.channel}.D/{sid}.D.*.*")
+    tails = (p.name.rsplit(".", 2)[1:] for p in files)
+    days = sorted((int(y), int(j)) for y, j in tails if y.isdigit() and j.isdigit())
+    if not days:
+        return None
+    year, jday = days[0]
+    return dt.datetime(year, 1, 1) + dt.timedelta(days=jday - 1)
 
 
 if __name__ == "__main__":

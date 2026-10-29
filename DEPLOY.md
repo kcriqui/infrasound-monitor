@@ -175,17 +175,24 @@ Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already insta
 The `--dashboard` timer runs `deploy/publish.sh` at 06:15. It extends the PSD grid and
 rebuilds `site/index.html` and `site/waterfall_full.html`. It builds them in a scratch
 directory and moves the finished pages into place, so a visitor never gets a
-half-written page and a failed rebuild leaves the previous day's pages up. Build the
-grid cache once before the first run:
+half-written page and a failed rebuild leaves the previous day's pages up.
+
+The first run seeds the grid cache (`analysis/grid_full.npz` + `.psd.f32`) from the
+archive's first day, so give it at least a few hours of data first. To start the
+baseline at a different date, say after moving the sensor, seed it yourself, then
+let the timer take over:
 
 ```bash
-.venv/bin/infra-waterfall archive --start <date> --end <date> --cache analysis/grid_full.npz
+.venv/bin/python tools/refresh.py --start 2026-08-04    # or: rm analysis/grid_full.* and rerun
 ```
 
 To put the pages on the internet, let Tailscale serve the folder directly. No web
-server is needed, and nothing on the Pi needs push credentials:
+server is needed, and nothing on the Pi needs push credentials. Install Tailscale and
+join your tailnet once (the `up` step prints a sign-in link), then enable Funnel:
 
 ```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
 sudo tailscale funnel --bg "$PWD/site"     # from the project root
 tailscale funnel status                    # -> https://<hostname>.<tailnet>.ts.net/
 ```

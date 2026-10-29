@@ -6,7 +6,7 @@ availability) into a single ``index.html`` with all images embedded as base64, s
 it opens with no server and can be published as-is to any static host (GitHub
 Pages / Netlify / S3).  Regenerate on a schedule to keep it fresh.
 
-    python tools/dashboard.py "C:/Users/you/infra-archive" \
+    python tools/dashboard.py archive \
         --start 2026-04-09 --end 2026-07-12 --cache analysis/grid_full.npz
 
 Reuses the sibling tools ``report.py`` and ``tonehunt.py``.

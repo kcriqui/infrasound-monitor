@@ -12,7 +12,7 @@ cached hourly PSD grid (so it runs in seconds), as a self-contained HTML file:
   * per-band noise levels (RMS in Pa and dB SPL),
   * persistent-tone check (bright horizontal line = steady source).
 
-    python tools/report.py "C:/Users/you/infra-archive" \
+    python tools/report.py archive \
         --start 2026-04-09 --end 2026-07-12 --cache analysis/grid_full.npz
 """
 from __future__ import annotations

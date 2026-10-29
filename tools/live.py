@@ -44,7 +44,7 @@ def load_live(path):
 def draw(ax, live, window, row, utc_offset):
     ax.clear()
     if live is None:
-        ax.text(0.5, 0.5, "waiting for live data…\n(is the InfraAcquire daemon running "
+        ax.text(0.5, 0.5, "waiting for live data…\n(is infra-acquire running "
                 "with --live-file?)", ha="center", va="center", color="#888",
                 transform=ax.transAxes)
         ax.set_xticks([]); ax.set_yticks([]); return

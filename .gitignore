@@ -47,3 +47,6 @@ deploy/truenas/.env
 .ssh/
 logs/
 legacy/
+
+# Claude Code: private per-machine notes (ops routes, memory TOC)
+CLAUDE.local.md

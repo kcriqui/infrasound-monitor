@@ -17,3 +17,5 @@ logs/
 legacy/
 config.toml
 deploy/truenas/.env
+
+CLAUDE.local.md

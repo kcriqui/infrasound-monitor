@@ -9,7 +9,6 @@ set up. Prints a checklist and exits non-zero if anything failed.
 """
 from __future__ import annotations
 import importlib
-import os
 import platform
 import subprocess
 import sys
@@ -113,23 +112,12 @@ def main():
 
 def _check_daemon():
     try:
-        if os.name == "nt":
-            r = subprocess.run(["schtasks", "/query", "/TN", "InfraAcquire", "/FO", "LIST"],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode == 0:
-                status = next((l.split(":", 1)[1].strip() for l in r.stdout.splitlines()
-                               if l.strip().startswith("Status")), "registered")
-                check("acquisition task (InfraAcquire)", OK, status)
-            else:
-                check("acquisition task (InfraAcquire)", WARN,
-                      "not registered -- run deploy\\setup.ps1")
-        else:
-            r = subprocess.run(["systemctl", "is-active", "infra-acquire"],
-                               capture_output=True, text=True, timeout=10)
-            state = r.stdout.strip() or "not installed"
-            check("acquisition service (infra-acquire)",
-                  OK if state == "active" else WARN,
-                  state + ("" if state == "active" else " -- run: bash deploy/setup.sh"))
+        r = subprocess.run(["systemctl", "is-active", "infra-acquire"],
+                           capture_output=True, text=True, timeout=10)
+        state = r.stdout.strip() or "not installed"
+        check("acquisition service (infra-acquire)",
+              OK if state == "active" else WARN,
+              state + ("" if state == "active" else " -- run: bash deploy/setup.sh"))
     except Exception as e:
         check("acquisition daemon", WARN, f"could not query ({e})")
 

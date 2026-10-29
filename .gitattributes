@@ -7,9 +7,6 @@
 *.service  text eol=lf
 *.timer    text eol=lf
 
-# Windows scripts -- CRLF:
-*.ps1      text eol=crlf
-
 # Binaries -- never touch:
 *.png  binary
 *.npz  binary

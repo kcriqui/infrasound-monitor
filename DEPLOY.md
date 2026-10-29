@@ -1,12 +1,12 @@
 # Deploying the INFRA20 monitor
 
 You need an **[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
-serial/USB port and **Python 3.10+**. There are three ways to run it:
+serial/USB port, a Linux machine with **Python 3.10+** and systemd, and ideally a
+Raspberry Pi. There are two ways to run it:
 
 | Setup | Acquires | Analyses + serves | Guide |
 |---|---|---|---|
-| Single Windows PC | the PC | the PC | sections 1–6 below |
-| **Raspberry Pi** (this station) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
+| **Raspberry Pi** (this station) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-this-stations-build) |
 | Pi + analysis server | the Pi | an always-on box, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
 
 This station's TrueNAS server also pulls the Pi's archive every night as a snapshotted
@@ -14,121 +14,14 @@ backup ([deploy/truenas/README.md](deploy/truenas/README.md)). From Oct 10 to 29
 did the rebuild too, because the rebuild's memory then grew with the record and had
 outgrown the 1 GB Pi. That's fixed (see "What a 1 GB Pi can carry" below).
 
-## 1. Get the code
+Until July 2026 the station ran on a Windows PC with AmaSeis. Windows support was
+removed in October 2026; the old `.Z` archive converts with `infra-convert`.
 
-```powershell
-git clone https://github.com/kcriqui/infrasound-monitor.git
-cd infrasound-monitor
-```
-
-Make sure `python` is on your PATH (`python --version` should print 3.10+). If you
-install Python from python.org, tick "Add Python to PATH".
-
-## 2. Configure your station
-
-```powershell
-copy config.example.toml config.toml
-notepad config.toml
-```
-
-Set at least the **serial port** and your **coordinates / site name**; the file is
-commented. `config.toml` is git-ignored, so your settings are never committed or
-overwritten by `git pull`.
-
-To find the serial port and confirm the framing, run the sniffer (close any other
-program using the port, e.g. AmaSeis, first):
-
-```powershell
-python -m infrasound_monitor.acquire --list      # list serial ports
-python -m infrasound_monitor.acquire COM3 --sniff # watch raw lines from a port
-```
-
-You should see one signed integer per line (e.g. `-00123`) at ~51 lines/second — put
-that measured rate in `config.toml` as `sample_rate`.
-
-## 3. Run setup
-
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\setup.ps1
-```
-
-This installs the package (`pip install -e .`), creates `config.toml` if missing, and
-registers a scheduled task **`InfraAcquire`** that runs the acquisition daemon at logon
-and restarts it on failure. (Add `-Dashboard` to also register the daily dashboard
-rebuild.) Per-user tasks need no admin.
-
-Verify the setup at any time — this catches most first-run problems:
-
-```powershell
-python tools\doctor.py   # checks Python, deps, config.toml, serial port, writable paths, daemon
-```
-
-## 4. Acquire and watch
-
-```powershell
-Start-ScheduledTask -TaskName InfraAcquire   # start acquiring now
-python tools\live.py                         # AmaSeis-style live drum view
-```
-
-Data lands as standard **miniSEED** in `archive\` (SDS layout) with a `station.xml`,
-so it works in ObsPy, Swarm, and the FDSN toolchain. Manage the daemon with
-`Start-ScheduledTask` / `Stop-ScheduledTask -TaskName InfraAcquire`; its log is
-`deploy\acquire.log`. Only one program can hold the port, so keep AmaSeis closed.
-
-### Surviving reboots (unattended operation)
-
-`InfraAcquire` runs **at logon**, not at boot — so after a power-up or a reboot (a
-Windows Update, a power blip), acquisition does **not** resume until someone signs in,
-leaving a gap in the archive. (If your archive is on a login-mounted drive such as
-Google Drive, that's a second reason a pre-login task can't write.) For a truly
-unattended monitor, enable **auto-login** so the machine boots straight to the desktop
-and the task fires on its own:
-
-1. `Win+R` → `netplwiz` → uncheck **"Users must enter a user name and password to use
-   this computer"** → Apply → enter the account password (leave blank if the account has
-   none) → OK.
-2. If that checkbox is missing, Windows Hello "Hello-only sign-in" is hiding it. Clear it
-   in **Settings → Accounts → Sign-in options** (toggle off "only allow Windows Hello
-   sign-in…"), or — if that toggle isn't shown (e.g. a local account) — from an
-   **elevated** PowerShell:
-   ```powershell
-   Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device' -Name DevicePasswordLessBuildVersion -Value 0
-   ```
-   then redo step 1.
-
-**Security tradeoff:** anyone who powers the machine on lands at your desktop with full
-access. Fine for a dedicated home sensor PC; not for a shared or sensitive machine. A
-**Raspberry Pi** (below) avoids this entirely — its systemd service starts at boot with
-no login and no auto-login compromise. Note also that if you later set/change the
-account password, auto-login silently breaks and step 1 must be redone.
-
-## 5. Analyze
-
-All tools take an archive path (defaults to your configured `archive`) and a date range:
-
-```powershell
-python -m infrasound_monitor.waterfall archive --start 2026-01-01 --end 2026-02-01 --out waterfall.html --cache analysis\grid_full.npz
-python tools\analyze.py   archive --start 2026-01-01 --end 2026-02-01                       # PPSD + dayplot
-python tools\tonehunt.py  archive --start 2026-01-01 --end 2026-02-01 --cache analysis\grid_full.npz --night
-python tools\report.py    archive --start 2026-01-01 --end 2026-02-01 --cache analysis\grid_full.npz   # station report
-python tools\transients.py archive --start 2026-01-01 --end 2026-02-01 --html events\index.html        # event explorer
-```
-
-Reuse the same `--cache` grid across tools so re-runs are instant.
-
-## 6. Optional: public dashboard
-
-`tools\dashboard.py` builds a single self-contained `index.html`. To publish it on a
-schedule, set up a static host (e.g. a GitHub Pages repo) at `site\`, then run
-`setup.ps1 -Dashboard` to register the daily rebuild+push (`deploy\publish.ps1`). Build
-the PSD grid cache once first (the `waterfall.py ... --cache` command above).
-
-## Raspberry Pi (recommended 24/7 build)
+## Raspberry Pi (this station's build)
 
 A dedicated Raspberry Pi is the ideal always-on monitor — it boots straight into
-acquiring with **no login required**, so it rides through power cuts and updates that
-would strand the Windows box (see "Surviving reboots" above). This station runs a
-**Pi 3B+ (1 GB)**.
+acquiring with **no login required**, so it rides through power cuts and updates.
+This station runs a **Pi 3B+ (1 GB)**.
 
 **What a 1 GB Pi can carry.** All of it. With acquisition, the status page and the TFT
 running, this station's Pi uses ~235 MB in total. The nightly analysis + site rebuild
@@ -175,6 +68,21 @@ journalctl -u infra-acquire -f           # live log
 sudo systemctl restart infra-acquire     # after editing config.toml
 .venv/bin/python tools/doctor.py         # verify the setup (deps, config, serial port, paths)
 ```
+
+### Find the serial port and confirm the framing
+
+Stop the daemon first (`sudo systemctl stop infra-acquire`); only one program can hold
+the port.
+
+```bash
+.venv/bin/python -m infrasound_monitor.acquire --list              # list serial ports
+.venv/bin/python -m infrasound_monitor.acquire /dev/ttyUSB0 --sniff # watch raw lines
+```
+
+You should see one signed integer per line (e.g. `-00123`) at ~51 lines/second — put
+that measured rate in `config.toml` as `sample_rate`. Data lands as standard
+**miniSEED** in `archive/` (SDS layout) with a `station.xml`, so it works in ObsPy,
+Swarm, and the FDSN toolchain.
 
 ### `--swap` — a memory safety margin on a 1 GB Pi
 
@@ -289,15 +197,14 @@ needs the `funnel` attribute in the tailnet policy (the default policy grants it
 members). Funnel serves only that folder. **Never funnel the status page (port 8080):**
 it has no authentication.
 
-> **Only one machine should build the dashboard.** If the rebuild ever moves (Windows →
-> Pi, or Pi → analysis server), disable the old one straight away:
-> `Disable-ScheduledTask -TaskName InfraDashboard` on Windows, or
-> `sudo systemctl disable --now infra-dashboard.timer` on the Pi.
+> **Only one machine should build the dashboard.** If the rebuild ever moves (Pi →
+> analysis server), disable the Pi's straight away:
+> `sudo systemctl disable --now infra-dashboard.timer`.
 
-### Test the Pi before you move the sensor (avoid a data gap)
+### Test a new Pi before you move the sensor (avoid a data gap)
 
 There's one sensor and the serial port is exclusive, so you can't read the real stream
-on the Pi while it's still on the PC. But you can validate everything else first with a
+on a new Pi while it's still on the old one. But you can validate everything else first with a
 **simulated** stream, so the only unavoidable gap is the ~1-minute physical USB swap.
 
 `tools/sim_infra20.py` creates a virtual serial port and feeds synthetic INFRA20 lines
@@ -319,13 +226,13 @@ rolling `live.npz`, gap handling. With both running, the **PiTFT LIVE page** sho
 `OK`, a ~3 Hz tone and a level, which also confirms the panel, SPI, wiring and buttons.
 (The display always reads `live_file` from `config.toml`; if you point acquire's
 `--live-file` somewhere else the panel will show `NO DATA` even though acquisition works.)
-To rehearse the analysis + publish path, `scp` a few days of real archive from the PC and
+To rehearse the analysis + publish path, `scp` a few days of real archive from the old machine and
 run `tools/report.py` / `tools/dashboard.py` against it. Then `.venv/bin/python tools/doctor.py`
 for the overall check (its serial-port test is the only thing that should fail until the
 real sensor is attached). Delete `/tmp/testarch` when done.
 
-**The cutover** (single, short gap): stop the PC daemon (`Stop-ScheduledTask InfraAcquire`),
-unplug the USB adapter from the PC, plug it into the Pi, confirm the port
+**The cutover** (single, short gap): stop the old daemon (`sudo systemctl disable --now
+infra-acquire`), move the USB adapter to the new Pi, confirm the port
 (`ls /dev/ttyUSB*`), set it in `config.toml`, then `sudo systemctl start infra-acquire`.
 The daemon records the brief handover as an explicit gap.
 
@@ -498,6 +405,22 @@ Then shut down, remove the card, and move the SSD to a **blue USB 3** port. Chec
 a proper **USB-C 3 A** supply, since undervoltage on a Pi 4 with an SSD attached causes
 intermittent faults that are miserable to diagnose headless.
 
+## Analysis tools
+
+All tools take an archive path (defaults to your configured `archive`) and a date range:
+
+```bash
+python -m infrasound_monitor.waterfall archive --start 2026-08-04 --end 2026-09-01 --out waterfall.html --cache analysis/grid_full.npz
+python tools/analyze.py    archive --start 2026-08-04 --end 2026-09-01                      # PPSD + dayplot
+python tools/tonehunt.py   archive --start 2026-08-04 --end 2026-09-01 --cache analysis/grid_full.npz --night
+python tools/report.py     archive --start 2026-08-04 --end 2026-09-01 --cache analysis/grid_full.npz   # station report
+python tools/transients.py archive --start 2026-08-04 --end 2026-09-01 --html events/index.html        # event explorer
+python tools/live.py                                                                     # live drum view (needs a display)
+```
+
+Reuse the same `--cache` grid across tools so re-runs are instant. The analysis tools
+are plain Python and also run on a desktop against a copy of the archive.
+
 ## Notes
 
 - **One tree.** Everything lives under the project folder: code, `config.toml`, the
@@ -505,6 +428,3 @@ intermittent faults that are miserable to diagnose headless.
   **local** disk (not a network or cloud-synced folder) so the 24/7 daemon writes
   reliably. An analysis server keeps the same shape, with the clone as its dataset root
   and the archive pulled into it.
-- **WSL** is fine for the *analysis* tools, but serial acquisition in WSL2 needs
-  `usbipd-win` to attach the USB device — a native Linux box or Raspberry Pi is simpler
-  for the daemon.

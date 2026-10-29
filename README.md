@@ -19,7 +19,7 @@ is calibrated, self-describing, and portable.
 
 > **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)**: a Raspberry Pi
 > (`deploy/setup.sh`), which runs everything including the nightly analysis even with
-> 1 GB, or a single Windows PC (`deploy\setup.ps1`). Optionally, an always-on server can
+> 1 GB. Optionally, an always-on server can
 > pull the archive as a snapshotted backup, or take over the analysis
 > ([deploy/truenas/README.md](deploy/truenas/README.md)).
 
@@ -45,7 +45,7 @@ pip install -e .
 ### 1. Convert existing AmaSeis data → miniSEED archive (Phase 1)
 
 ```bash
-infra-convert "Y:/AmaSeis" "C:/Users/you/infra-archive" \
+infra-convert ~/AmaSeis ~/infra-archive \
     --network XX --station INFRA --location 00
 ```
 
@@ -64,7 +64,7 @@ from wall-clock by <~0.3 s — negligible for infrasound.)
 ### 2. Spectral waterfall over a date range (Phase 2 — primary display)
 
 ```bash
-infra-waterfall "C:/Users/you/infra-archive" \
+infra-waterfall ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 \
     --out waterfall.html --cache grid.npz
 ```
@@ -93,7 +93,7 @@ persistent narrowband source would appear as a horizontal line.
 ### 3. Live acquisition from the INFRA20 serial port
 
 ```bash
-infra-acquire COM4 "C:/Users/you/infra-archive"
+infra-acquire /dev/ttyUSB0 ~/infra-archive
 ```
 
 Reads the INFRA20's serial stream (**9600 8N1, one signed integer count per
@@ -104,7 +104,7 @@ serial dropout leaves an explicit gap; a USB glitch triggers reconnect. Only one
 program can hold the port, so **close AmaSeis first** — this replaces it.
 
 ```bash
-infra-acquire COM4 --sniff          # just print raw lines to eyeball the framing
+infra-acquire /dev/ttyUSB0 --sniff          # just print raw lines to eyeball the framing
 ```
 
 **Live drum view (AmaSeis-style).** The port is exclusive, so a live viewer can't
@@ -113,14 +113,14 @@ few minutes of raw samples to that local file; `tools/live.py` tails it and rend
 scrolling helicorder that updates ~once a second — without interrupting archiving:
 
 ```bash
-infra-acquire COM4 "C:/Users/you/infra-archive" --live-file C:/Users/you/live.npz
-python tools/live.py --live-file C:/Users/you/live.npz    # live window; --snapshot x.png for one frame
+infra-acquire /dev/ttyUSB0 ~/infra-archive --live-file ~/live.npz
+python tools/live.py --live-file ~/live.npz    # live window; --snapshot x.png for one frame
 ```
 
 ### 4. Helicorder / drum view (Phase 3 — optional)
 
 ```bash
-infra-helicorder "C:/Users/you/infra-archive" 2026-07-01 --out day.png
+infra-helicorder ~/infra-archive 2026-07-01 --out day.png
 ```
 
 The classic drum-recorder view AmaSeis emulated. Note **Swarm** (load the archive) and
@@ -145,7 +145,7 @@ response) plus an optional calibrated dayplot, and reports whether any persisten
 narrowband tone stands out above the background — the datacenter test:
 
 ```bash
-python tools/analyze.py "C:/Users/you/infra-archive" \
+python tools/analyze.py ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 --dayplot 2026-07-01
 ```
 
@@ -163,7 +163,7 @@ prints the most-persistent frequencies (>~50 % of hours at a fixed frequency = a
 real tone).
 
 ```bash
-python tools/tonehunt.py "C:/Users/you/infra-archive" \
+python tools/tonehunt.py ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz   # reuse the waterfall's grid cache
 ```
 
@@ -174,7 +174,7 @@ renders a nightly-mean waterfall and ranks frequencies **more persistent at nigh
 than day** (the datacenter-like signature).
 
 ```bash
-python tools/tonehunt.py "C:/Users/you/infra-archive" --start ... --end ... \
+python tools/tonehunt.py ~/infra-archive --start ... --end ... \
     --cache grid.npz --night
 ```
 
@@ -185,7 +185,7 @@ density of hourly PSD, with 10/50/90th percentiles), per-band noise levels (Pa a
 dB SPL), and the persistent-tone verdict — all from the cached grid, in seconds:
 
 ```bash
-python tools/report.py "C:/Users/you/infra-archive" \
+python tools/report.py ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ```
 
@@ -196,7 +196,7 @@ designed to publish as-is to a static host (GitHub Pages / Netlify / S3); regene
 on a schedule to keep it current:
 
 ```bash
-python tools/dashboard.py "C:/Users/you/infra-archive" \
+python tools/dashboard.py ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ```
 
@@ -210,7 +210,7 @@ correlating event times with public **train schedules** (GTFS) and **ADS-B fligh
 tracks** (e.g. the OpenSky API) to positively identify sources.
 
 ```bash
-python tools/transients.py "C:/Users/you/infra-archive" \
+python tools/transients.py ~/infra-archive \
     --start 2026-06-01 --end 2026-06-22 --html events/index.html --csv events.csv --top 24
 ```
 
@@ -221,7 +221,7 @@ python tools/transients.py "C:/Users/you/infra-archive" \
 - [x] AmaSeis-style live drum viewer (`tools/live.py`)
 - [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
 - [x] Public, auto-updating dashboard, rebuilt and served by a 1 GB Pi in flat memory
-- [x] Turnkey deploy: Windows, Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
+- [x] Turnkey deploy: Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
       and a TrueNAS SCALE analysis stack that pulls from the Pi (`deploy/truenas/`)
 - [ ] One-command before/after comparison for when the datacenter energises
 - [ ] G-weighting (ISO 7196) for health-threshold context
@@ -244,10 +244,9 @@ tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dash
                  tft_status.py (Raspberry Pi Mini PiTFT status display) ·
                  statusd.py (lightweight live-status web page) ·
                  sim_infra20.py (synthetic serial source for hardware-free testing)
-deploy/          Windows: setup.ps1 / acquire-daemon.ps1 / publish.ps1
-                 Linux:   setup.sh (--dashboard/--display/--swap/--backup) + backup.sh
-                          + *.service / *.timer  (systemd: acquire / dashboard / display / status / backup)
-                 truenas/ Docker stack: pull archive from the Pi, rebuild, serve, publish
+deploy/          setup.sh (--dashboard/--display/--swap/--backup) + backup.sh
+                 + *.service / *.timer  (systemd: acquire / dashboard / display / status / backup)
+                 truenas/ Docker stack: pull the archive from the Pi as a backup (optionally rebuild)
 config.example.toml  copy to config.toml (git-ignored) and edit for your station
-DEPLOY.md        deployment guide (Windows + Raspberry Pi)
+DEPLOY.md        deployment guide (Raspberry Pi + optional analysis server)
 ```

@@ -19,7 +19,7 @@ point the daemon at that path:
     .venv/bin/python tools/tft_status.py --snapshot live.png
 
 The synthetic signal is a low tone + noise, so the display shows a plausible level and
-dominant frequency. Use --stdout to just print lines (works on Windows too, for a look).
+dominant frequency. Use --stdout to just print lines, for a look.
 """
 from __future__ import annotations
 import argparse
@@ -82,7 +82,7 @@ def main():
         return
 
     if not hasattr(os, "openpty"):
-        sys.exit("pty mode needs Linux/macOS; use --stdout on Windows.")
+        sys.exit("pty mode needs Linux/macOS; use --stdout elsewhere.")
 
     import tty
     master_fd, slave_fd = os.openpty()

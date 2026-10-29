@@ -335,7 +335,7 @@ def sniff(port: str, baud: int = 9600, seconds: float = 5.0) -> None:
 def main(argv=None):
     p = argparse.ArgumentParser(description="Live INFRA20 serial acquisition -> miniSEED SDS.")
     p.add_argument("port", nargs="?", default=None,
-                   help="serial port, e.g. COM4 or /dev/ttyUSB0 (default: config [acquisition].port)")
+                   help="serial port, e.g. /dev/ttyUSB0 (default: config [acquisition].port)")
     p.add_argument("archive", nargs="?", default=None,
                    help="SDS archive root (default: config [acquisition].archive)")
     p.add_argument("--baud", type=int, default=9600)

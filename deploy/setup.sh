@@ -4,7 +4,7 @@
 #   bash deploy/setup.sh                              # acquisition daemon only
 #   bash deploy/setup.sh --dashboard                  # + daily dashboard rebuild (systemd timer)
 #   bash deploy/setup.sh --display                    # + Mini PiTFT status display service
-#   bash deploy/setup.sh --swap                       # bump swap to 2 GB (recommended on a 1 GB Pi)
+#   bash deploy/setup.sh --swap                       # bump swap to 2 GB (a safety margin on a 1 GB Pi)
 #   bash deploy/setup.sh --backup <DEST>              # + nightly archive backup (rsync to DEST)
 #   bash deploy/setup.sh --status                     # + lightweight status web page (port 8080)
 #   bash deploy/setup.sh --dashboard --display --swap --status --backup user@nas:/infra  # full Pi build
@@ -89,7 +89,7 @@ if [ "$SWAP" = 1 ]; then
         sudo dphys-swapfile swapon
     elif ! swapon --show=NAME --noheadings 2>/dev/null | grep -q '/swapfile'; then
         # Newer Raspberry Pi OS (Trixie) has no dphys-swapfile -- create a plain /swapfile.
-        # zram alone isn't enough headroom for the full-range dashboard render on a 1 GB Pi.
+        # A margin for the ad-hoc analysis tools; the nightly rebuild itself peaks ~300 MB.
         echo "  creating a 2 GB /swapfile (no dphys-swapfile on this OS) ..."
         sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
         sudo chmod 600 /swapfile
@@ -122,6 +122,7 @@ if [ "$DASH" = 1 ]; then
     sudo systemctl daemon-reload
     sudo systemctl enable --now infra-dashboard.timer
     echo "  (build the PSD grid cache once before the first run -- see DEPLOY.md)"
+    echo "  to serve the dashboard:  sudo tailscale funnel --bg $ROOT/site"
 fi
 
 # 7. Optional Mini PiTFT status display

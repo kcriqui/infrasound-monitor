@@ -144,6 +144,7 @@ def build_cache(cache, archive, start: dt.datetime, end: dt.datetime,
     Returns the number of hours written."""
     step = dt.timedelta(days=chunk_days)
     pending = []                    # leading hours with no data: freqs not known yet
+    nfreq = None                    # set by the first window with data
     written = 0
     t = start
     while t < end:

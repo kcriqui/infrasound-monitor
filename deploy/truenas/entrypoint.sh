@@ -2,7 +2,7 @@
 # The container runs as the dataset's owning uid (see `user:` in the compose
 # file), which does not exist in the image. OpenSSH calls getpwuid() and refuses
 # to start without a passwd entry -- "No user exists for uid NNNN" -- which kills
-# the rsync pull. git is similarly unhappy.
+# the rsync pull.
 #
 # So synthesise one. /etc/passwd is made group-writable in the Dockerfile and the
 # container runs with gid 0, which is what lets a non-root user append to it.

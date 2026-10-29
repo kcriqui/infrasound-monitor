@@ -15,7 +15,7 @@ from obspy.core.inventory import Inventory, Network, Station, Channel, Site
 from obspy.core.inventory.response import Response
 
 from .config import (
-    StationConfig, DEFAULT_STATION, PA_PER_COUNT, NOMINAL_FS, FULL_SCALE_PA,
+    StationConfig, DEFAULT_STATION, PA_PER_COUNT, NOMINAL_FS,
 )
 
 COUNTS_PER_PA = 1.0 / PA_PER_COUNT   # 1000 counts / Pa

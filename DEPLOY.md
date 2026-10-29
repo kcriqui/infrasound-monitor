@@ -3,16 +3,16 @@
 You need an **[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
 serial/USB port and **Python 3.10+**. There are three ways to run it:
 
-| Setup | Acquires | Analyses + publishes | Guide |
+| Setup | Acquires | Analyses + serves | Guide |
 |---|---|---|---|
 | Single Windows PC | the PC | the PC | sections 1–6 below |
-| **Raspberry Pi** (this station; a server pulls the archive as a backup) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
-| Pi + analysis server (this station, Oct 10–29 2026) | the Pi | an always-on box, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
+| **Raspberry Pi** (this station) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-recommended-247-build) |
+| Pi + analysis server | the Pi | an always-on box, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
 
-The split started as a necessity: the nightly rebuild's memory grew with the record,
-and in October 2026 it outgrew this station's 1 GB Pi. That's fixed (see "What a
-1 GB Pi can carry" below), so a Pi can again run everything. An analysis server is
-still the more robust setup, with off-box backups and a faster rebuild.
+This station's TrueNAS server also pulls the Pi's archive every night as a snapshotted
+backup ([deploy/truenas/README.md](deploy/truenas/README.md)). From Oct 10 to 29, 2026 it
+did the rebuild too, because the rebuild's memory then grew with the record and had
+outgrown the 1 GB Pi. That's fixed (see "What a 1 GB Pi can carry" below).
 
 ## 1. Get the code
 
@@ -131,19 +131,16 @@ would strand the Windows box (see "Surviving reboots" above). This station runs 
 **Pi 3B+ (1 GB)**.
 
 **What a 1 GB Pi can carry.** All of it. With acquisition, the status page and the TFT
-running, this station's Pi uses ~235 MB in total. The nightly analysis + site rebuild covers the whole
-record. It used to load the whole PSD grid and copy it a dozen times, so its memory
+running, this station's Pi uses ~235 MB in total. The nightly analysis + site rebuild
+covers the whole record. It used to load the whole PSD grid and copy it a dozen times, so its memory
 grew ~2.4 GB per year of record. In October 2026 it outgrew this station's Pi and took
 it down three nights running. Now the grid cache is memory-mapped (`grid_full.npz`
 plus a `grid_full.psd.f32` sidecar of float32 rows) and the rebuild streams over it a
 block of hours at a time. Its peak is ~300–350 MB whether the record is three months or
-seven years long. That was measured inside a 1 GB container with no swap. What still
-grows is **time** (about a minute per year of record on a desktop CPU, several times
-that on a Pi) and the grid file on disk (~110 MB per year).
-
-You can still move the analysis to a bigger always-on machine
-([deploy/truenas/README.md](deploy/truenas/README.md)) for backups and speed. With it
-moved, the Pi needs no `--dashboard` and holds no push credentials.
+seven years long. That was measured inside a 1 GB container with no swap, and on this
+station's Pi 3B+ the real rebuild peaks at 304 MB and takes 75–90 s. What still grows is
+**time** (about a minute per year of record on a desktop CPU, several times that on a
+Pi) and the grid file on disk (~110 MB per year).
 
 **Distro:** flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. This
 station runs Trixie, and Bookworm works too.
@@ -179,7 +176,7 @@ sudo systemctl restart infra-acquire     # after editing config.toml
 .venv/bin/python tools/doctor.py         # verify the setup (deps, config, serial port, paths)
 ```
 
-### `--swap` — keep the analysis from OOM-ing (do this on a 1 GB Pi)
+### `--swap` — a memory safety margin on a 1 GB Pi
 
 The nightly rebuild now peaks at ~300–350 MB (see "What a 1 GB Pi can carry" above),
 so on a 1 GB Pi swap is a safety margin rather than a requirement. It also covers the
@@ -265,56 +262,37 @@ Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already insta
 `systemctl list-timers 'infra-*'`. Size the drive for your retention — the archive grows
 ~3.5 GB/year, so a 4 GB stick holds roughly a year.
 
-### Publishing the dashboard to GitHub Pages
+### Serving the dashboard
 
-*This is for a Pi that does its own analysis. If an analysis server builds the site, it
-publishes instead, with its own deploy key
-([deploy/truenas/README.md](deploy/truenas/README.md)), and the Pi needs none of this.*
+The `--dashboard` timer runs `deploy/publish.sh` at 06:15. It extends the PSD grid and
+rebuilds `site/index.html` and `site/waterfall_full.html`. It builds them in a scratch
+directory and moves the finished pages into place, so a visitor never gets a
+half-written page and a failed rebuild leaves the previous day's pages up. Build the
+grid cache once before the first run:
 
-The `--dashboard` timer runs `deploy/publish.sh`, which rebuilds the dashboard into
-`site/` and, when `site/` is a git clone of your Pages repo, force-pushes a single amended
-commit (so the published repo never accumulates history). Wire the push target up once,
-with a **deploy key** scoped to just the site repo — no account-wide token:
+```bash
+.venv/bin/infra-waterfall archive --start <date> --end <date> --cache analysis/grid_full.npz
+```
 
-1. Generate a key on the Pi (no passphrase, so the service can push unattended):
-   ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/infra_site -N "" -C "infra-pi-site"
-   cat ~/.ssh/infra_site.pub
-   ```
-2. On GitHub, add that **public** key to the *site* repo → Settings → Deploy keys → Add
-   deploy key → paste it → tick **Allow write access**.
-3. Point SSH at that key for this repo (append to `~/.ssh/config`):
-   ```
-   Host github-infra-site
-     HostName github.com
-     User git
-     IdentityFile ~/.ssh/infra_site
-     IdentitiesOnly yes
-   ```
-4. Clone the Pages repo into `site/` via that alias — do it once interactively so GitHub's
-   host key gets trusted (needed for the unattended pushes later):
-   ```bash
-   rm -rf site        # drop any local-only build first
-   git clone git@github-infra-site:<you>/<site-repo>.git site
-   ```
-5. Test the pipeline:
-   ```bash
-   bash deploy/publish.sh
-   tail deploy/publish.log        # expect a "[publish] pushed" line
-   ```
+To put the pages on the internet, let Tailscale serve the folder directly. No web
+server is needed, and nothing on the Pi needs push credentials:
 
-Re-run `setup.sh --dashboard` if you installed the dashboard service before this change
-(it now runs `publish.sh`, not `refresh.py`). Pre-cutover the dashboard has little data;
-once the sensor is on the Pi, build the PSD grid cache once
-(`.venv/bin/infra-waterfall archive --start <date> --end <date> --cache
-analysis/grid_full.npz`) and the nightly run keeps it current.
+```bash
+sudo tailscale funnel --bg "$PWD/site"     # from the project root
+tailscale funnel status                    # -> https://<hostname>.<tailnet>.ts.net/
+```
 
-> **Avoid duelling publishers:** only one machine may force-push to the Pages repo.
-> When publishing moves (Windows → Pi, or Pi → analysis server), disable the old one
-> straight away: `Disable-ScheduledTask -TaskName InfraDashboard` on Windows, or
-> `sudo systemctl disable --now infra-dashboard.timer` on the Pi. Then delete its deploy
-> key from the site repo. Otherwise the two overwrite each other and the site flip-flops
-> between fresh and stale data.
+This station's dashboard is at `https://infra.tail4c32e5.ts.net/`. The setting persists
+across reboots. Funnel relays through Tailscale's edge, so your home IP is never exposed.
+Use `tailscale serve` instead of `funnel` to keep it on your tailnet only. The node
+needs the `funnel` attribute in the tailnet policy (the default policy grants it to
+members). Funnel serves only that folder. **Never funnel the status page (port 8080):**
+it has no authentication.
+
+> **Only one machine should build the dashboard.** If the rebuild ever moves (Windows →
+> Pi, or Pi → analysis server), disable the old one straight away:
+> `Disable-ScheduledTask -TaskName InfraDashboard` on Windows, or
+> `sudo systemctl disable --now infra-dashboard.timer` on the Pi.
 
 ### Test the Pi before you move the sensor (avoid a data gap)
 
@@ -487,12 +465,12 @@ systemctl status infra-acquire
 curl -s localhost:8080/status.json      # age_s small, today_mb climbing
 ```
 
-Let one nightly rebuild run (`deploy/publish.log` on a self-publishing Pi, or the analysis
-server's next pull) and confirm it succeeded, then
+Let one nightly rebuild run (`deploy/publish.log` should end `[publish] rebuilt`, and
+the analysis server's next pull should succeed), then
 **keep the SD card untouched** as a rollback — two-minute recovery if the SSD misbehaves,
 and a point-in-time snapshot of the archive. Because this is a clone, the hostname, SSH
-host keys, VPN identity, `authorized_keys`, any deploy key and systemd units all carry
-over unchanged.
+host keys, VPN identity (and its Funnel setting), `authorized_keys` and systemd units
+all carry over unchanged.
 
 On a Pi 3B+ the USB bus is 2.0 and shared with Ethernet, so expect **endurance and
 capacity, not speed**. If it won't boot at all, suspect the USB–SATA bridge rather than the

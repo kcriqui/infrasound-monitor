@@ -1,10 +1,10 @@
 # infrasound-monitor
 
-### 🌊 [**Live dashboard → kcriqui.github.io/infrasound-monitor-site**](https://kcriqui.github.io/infrasound-monitor-site/)
+### 🌊 [**Live dashboard → infra.tail4c32e5.ts.net**](https://infra.tail4c32e5.ts.net/)
 
-Rebuilt daily at 06:15 Pacific on the station's Raspberry Pi: spectral waterfall,
-long-term noise (PDF-PSD), data availability, and a night-only persistent-tone hunt for
-datacenter noise.
+Rebuilt daily at 06:15 Pacific on the station's Raspberry Pi and served from it over
+Tailscale Funnel: spectral waterfall, long-term noise (PDF-PSD), data availability, and
+a night-only persistent-tone hunt for datacenter noise.
 
 ---
 
@@ -220,7 +220,7 @@ python tools/transients.py "C:/Users/you/infra-archive" \
 - [x] Live acquisition daemon (`infra-acquire`) — framing hardware-verified; auto-start service
 - [x] AmaSeis-style live drum viewer (`tools/live.py`)
 - [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
-- [x] Public, auto-updating dashboard (GitHub Pages), rebuilt on a 1 GB Pi in flat memory
+- [x] Public, auto-updating dashboard, rebuilt and served by a 1 GB Pi in flat memory
 - [x] Turnkey deploy: Windows, Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
       and a TrueNAS SCALE analysis stack that pulls from the Pi (`deploy/truenas/`)
 - [ ] One-command before/after comparison for when the datacenter energises

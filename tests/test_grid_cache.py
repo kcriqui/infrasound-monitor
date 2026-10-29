@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scipy.ndimage import median_filter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -138,6 +137,17 @@ def _with_gaps_and_a_tone(n=24 * 40, nfreq=200):
     return g
 
 
+def _night_means_whole_grid(times, resid, have, night_hours):
+    """Reference: the original whole-grid night waterfall (mean residual per night)."""
+    anchor = night_hours[0]
+    nmask = np.isin([t.hour for t in times], night_hours) & have
+    labels = [(t - dt.timedelta(hours=anchor)).date() for t in times]
+    udates = sorted({labels[i] for i in np.flatnonzero(nmask)})
+    out = np.array([np.nanmean(resid[[i for i in np.flatnonzero(nmask) if labels[i] == d]], axis=0)
+                    for d in udates])
+    return out, [dt.datetime(d.year, d.month, d.day) for d in udates], nmask
+
+
 def test_night_day_stats_match_the_whole_grid_computation():
     g = _with_gaps_and_a_tone()
     times, freqs, psd = list(g["times"]), g["freqs"], g["psd_db"]
@@ -145,7 +155,7 @@ def test_night_day_stats_match_the_whole_grid_computation():
     night_hours, _ = tonehunt.quiet_window(times, freqs, psd, have, 5)
     # the original whole-grid path
     resid, _ = tonehunt.tone_residual(psd, freqs, 1.0)
-    wf0, dd0, nm0 = tonehunt.night_dates_matrix(times, resid, have, night_hours)
+    wf0, dd0, nm0 = _night_means_whole_grid(times, resid, have, night_hours)
     pn0 = np.mean(resid[nm0] > 6.0, axis=0)
     pd0 = np.mean(resid[have & ~nm0] > 6.0, axis=0)
     # streaming

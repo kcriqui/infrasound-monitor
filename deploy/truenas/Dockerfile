@@ -1,13 +1,13 @@
-# Analysis image for the TrueNAS SCALE box. The Pi is a data logger; everything
-# expensive runs here, where there is RAM to spare.
+# Analysis image for the TrueNAS SCALE box: pulls the Pi's archive as a
+# snapshotted backup and, when not pull-only, rebuilds the dashboard here.
 #
 # Built from the repo root:  docker build -f deploy/truenas/Dockerfile .
 FROM python:3.12-slim
 
-# rsync+ssh to pull the archive from the Pi, git to push the built site.
+# rsync+ssh to pull the archive from the Pi.
 # No build-essential: numpy/scipy/obspy/matplotlib all ship manylinux wheels.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git rsync openssh-client ca-certificates tzdata \
+        rsync openssh-client ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/infrasound-monitor

@@ -1,32 +1,19 @@
-# Running the analysis on TrueNAS SCALE
+# Archive backup (and optional analysis) on TrueNAS SCALE
 
-The Raspberry Pi is a good data logger and a bad analysis box. Acquisition needs
-almost nothing; the nightly rebuild processes the *whole* record and grows with it.
-By October 2026 that job wanted ~1.3 GB on a 905 MB Pi, swapped ~1.2 GB to the SD
-card, and took the machine down three nights running — acquisition stayed healthy
-throughout, which is the clue that the two jobs belong on different machines.
+Each morning at 06:15 this stack pulls the Raspberry Pi's miniSEED archive onto a
+TrueNAS dataset. ZFS snapshots make that pulled copy the station's off-Pi **backup**,
+replacing the small USB stick as the copy that matters. Pulling (rather than having the
+Pi push) means the Pi holds no credentials for the NAS.
 
-So: the Pi keeps `infra-acquire`, `statusd` and the TFT. TrueNAS pulls the archive,
-rebuilds, and serves.
+**Current mode: pull-only.** The Pi rebuilds the dashboard itself, peaking at ~300 MB
+on a 1 GB Pi 3B+, and serves it over Tailscale Funnel (see DEPLOY.md). The compose file
+sets `INFRA_PULL_ONLY: "1"`, so the NAS only pulls. The stack can also rebuild and serve
+the dashboard here instead; see the last section.
 
-**Update, late October 2026:** the memory growth itself is fixed. The grid cache is
-now memory-mapped and the rebuild streams over it, so peak memory stays at ~300–350 MB
-however long the record gets. That was measured out to 7 years of synthetic record
-inside a 1 GB cap.
-
-**Current mode, since 2026-10-29: pull-only.** This station's Pi rebuilds and
-publishes for itself again, peaking at ~304 MB in 75–90 s. The compose file sets
-`INFRA_PULL_ONLY: "1"`, so each 06:15 run only rsyncs the archive here, where it's the
-snapshotted off-Pi backup. `INFRA_SITE_REPO` is commented out, and the `web` service
-sits behind the `serve` profile, so nothing serves a page that has stopped updating.
-The sections below still describe the full analysis setup. To return to it, set
-`INFRA_PULL_ONLY: "0"`, restore `INFRA_SITE_REPO`, start web with
-`docker compose --profile serve up -d`, and **disable the Pi's
-`infra-dashboard.timer` first** (only one machine may publish).
-
-Pulling (rather than having the Pi push) means no credentials live on the Pi, and
-the pulled copy doubles as the off-Pi **backup** — on ZFS with snapshots, replacing
-the 3.6 GB USB stick that was months from full.
+*History:* from Oct 10 to 29, 2026 this box did the nightly rebuild. That was because
+the rebuild's memory then grew with the record, and it had outgrown the Pi. The grid
+cache is now memory-mapped and the rebuild streams over it, so its memory stays flat,
+and the job went back to the Pi.
 
 ## 1. Dataset
 
@@ -36,12 +23,10 @@ shape as the Pi's clone, which keeps its `archive/` inside it too:
 ```
 /mnt/HDD-pool/Projects/Claude/Infrasound/
   src/ tools/ deploy/ ...  the code (tracked)
-  .ssh/        id_infra (-> the Pi), id_site (-> the Pages repo)
-  archive/     rsynced from the Pi; this is also the backup
-  analysis/    grid_full.npz and other caches
-  site/        built dashboard, served by nginx
+  .ssh/        id_infra (-> the Pi), known_hosts (the Pi's pinned host key)
+  archive/     rsynced from the Pi; this is the backup
   logs/        pipeline.log
-  config.toml  station identity
+  config.toml  station identity (only used when rebuilding here)
 ```
 
 Everything but the code is git-ignored, and docker-ignored too, so the keys and the
@@ -53,219 +38,54 @@ directory:
 git clone <this repo> /mnt/HDD-pool/Projects/Claude/Infrasound
 ```
 
-Change the path in `docker-compose.yml` if you use a different one — it appears once
-under each service.
+Change the path in `docker-compose.yml` if you use a different one.
 
-## 2. Keys
+## 2. Key
 
-Both generated **on the NAS**, kept in the dataset rather than `/root/.ssh` so they
-survive SCALE upgrades and are mountable into the container.
+Generated **on the NAS**, kept in the dataset rather than `/root/.ssh` so it survives
+SCALE upgrades and can be mounted into the container:
 
 ```bash
 D=/mnt/HDD-pool/Projects/Claude/Infrasound
-mkdir -p $D/.ssh && chmod 700 $D/.ssh
-ssh-keygen -t ed25519 -N "" -C "truenas->pi"   -f $D/.ssh/id_infra
-ssh-keygen -t ed25519 -N "" -C "truenas->site" -f $D/.ssh/id_site
-chmod 600 $D/.ssh/id_infra $D/.ssh/id_site
-```
-
-### A note on permissions
-
-Do not bother trying to `chmod 600` these. The dataset is an SMB share with
-NFSv4 ACLs and `aclmode=restricted`, so POSIX `chmod` is refused **even for
-root** -- the ACL is authoritative. `chown` works; `chmod` returns
-`Operation not permitted`.
-
-`pipeline.sh` handles this: at the start of every run it copies the keys to
-`/tmp/ssh` inside the container with mode 600, and uses the copies. The overlay
-filesystem has ordinary POSIX semantics, so this sidesteps the host ACLs
-entirely, and copying as root satisfies ssh's ownership check too.
-
-The keys must stay readable by the uid the container runs as (the dataset
-owner, see `user:` in the compose file), because `pipeline.sh` reads them to make
-its 600-mode copies:
-
-```bash
-sudo chown 3000:0 .ssh/id_infra .ssh/id_site    # 3000 = kevin, the dataset owner
-```
-
-That does mean the private keys are readable through the SMB share, since it is
-the same uid. If that bothers you, put them on a separate, unshared dataset owned
-by the same uid and point the `.ssh` bind mount at it -- the container does not
-care where they come from. On a home LAN, with a `restrict`-scoped key on the Pi
-and a single-repo deploy key, the exposure is modest.
-
-To test the pull **by hand**, mirror what the container does rather than
-pointing ssh at the share directly, or it will reject the key's mode:
-
-```bash
-cd /mnt/HDD-pool/Projects/Claude/Infrasound
-sudo install -m 600 .ssh/id_infra /tmp/k
-sudo ssh -i /tmp/k -o IdentitiesOnly=yes -o UserKnownHostsFile=.ssh/known_hosts     infra@100.72.190.123 'ls infrasound-monitor/archive/2026/XX/INFRA/SDF.D | tail -3'
-sudo rm -f /tmp/k
+mkdir -p $D/.ssh
+ssh-keygen -t ed25519 -N "" -C "truenas->pi" -f $D/.ssh/id_infra
+sudo chown 3000:0 $D/.ssh/id_infra    # 3000 = kevin, the dataset owner the container runs as
 ```
 
 `id_infra.pub` goes on the **Pi**, prefixed with `restrict` (no port forwarding, agent
 forwarding, PTY or X11 — rsync still works):
 
 ```bash
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
 echo 'restrict ssh-ed25519 AAAA...  truenas->pi' >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
 ```
 
-`id_site.pub` goes on **GitHub** → the *site* repo → Settings → Deploy keys → Add,
-with **Allow write access** ticked. Generate a new one rather than copying the Pi's
-`infra_site`, so either machine can be revoked independently.
+Pin the Pi's host key in `$D/.ssh/known_hosts`. The pull uses
+`StrictHostKeyChecking=yes`, so a changed host key stops it rather than being accepted.
 
-Verify the pull path from the NAS before going further:
+### A note on permissions
 
-```bash
-ssh -i $D/.ssh/id_infra -o IdentitiesOnly=yes infra@100.72.190.123 \
-    'ls infrasound-monitor/archive/2026/XX/INFRA/SDF.D | tail -3'
-```
+Don't try to `chmod 600` the key. The dataset is an SMB share with NFSv4 ACLs and
+`aclmode=restricted`, so POSIX `chmod` is refused **even for root** -- the ACL is
+authoritative. `chown` works; `chmod` returns `Operation not permitted`.
 
-## 3. Config
+`pipeline.sh` handles this. At the start of every run it copies the key to `/tmp/ssh`
+inside the container with mode 600, and uses the copy. The overlay filesystem has
+ordinary POSIX semantics, so this sidesteps the host ACLs. The key must stay readable by
+the container's uid. That makes it readable through the SMB share too; if that matters,
+keep `.ssh/` on a separate, unshared dataset owned by the same uid.
 
-```bash
-cp config.example.toml /mnt/HDD-pool/Projects/Claude/Infrasound/config.toml
-```
-
-Set the station identity to match the Pi's, and point the archive at the container's
-view of the dataset:
-
-```toml
-[acquisition]
-archive = "/data/archive"
-```
-
-Serial port and live-file settings are ignored here — nothing acquires on the NAS.
-`config.py` reads `$INFRASOUND_CONFIG`, which the image sets to `/data/config.toml`.
-
-## 4. Seed the grid (once)
-
-`refresh.py` extends an existing cache and refuses to create one, so build it once.
-**Start at 2026-08-04**, the date the sensor moved to a quieter spot in the house.
-That move put a step change in the noise floor, and pooling both sides into one
-PDF-PSD and one set of band statistics would mix two different acoustic
-environments -- which matters, because the whole point is a clean "before"
-against which to judge the datacenter once it energises. Memory no longer forces
-this choice; it is the right one on the science.
-
-The pre-move record is not lost: the raw archive is untouched and the grid is
-only a cache, so a different epoch is one regeneration away.
+To test the pull **by hand**, mirror what the container does, or ssh will reject the
+key's mode:
 
 ```bash
 cd /mnt/HDD-pool/Projects/Claude/Infrasound
-docker compose -f deploy/truenas/docker-compose.yml build
-docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
-    bash deploy/truenas/pipeline.sh        # pulls the archive first
-docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
-    python -m infrasound_monitor.waterfall /data/archive \
-      --start 2026-08-04 --end $(date -u +%Y-%m-%d) \
-      --cache /data/analysis/grid_full.npz --out /tmp/seed.html
+sudo install -m 600 .ssh/id_infra /tmp/k
+sudo ssh -i /tmp/k -o IdentitiesOnly=yes -o UserKnownHostsFile=.ssh/known_hosts \
+    infra@100.72.190.123 'ls infrasound-monitor/archive/2026/XX/INFRA/SDF.D | tail -3'
+sudo rm -f /tmp/k
 ```
 
-## 5. Publishing (optional)
-
-To keep the public GitHub Pages site, make `site/` a clone of the Pages repo:
-
-```bash
-cd /mnt/HDD-pool/Projects/Claude/Infrasound
-GIT_SSH_COMMAND="ssh -i .ssh/id_site -o IdentitiesOnly=yes" \
-  git clone git@github.com:<you>/<site-repo>.git site
-```
-
-`pipeline.sh` then force-pushes a single amended commit after each rebuild. Without a
-clone it just rebuilds locally and nginx serves it — the push is an optional mirror.
-
-Hosting locally and publishing are **not** exclusive, and doing both is worth it: the
-NAS view is fast and private over Tailscale, while the Pages URL stays public and
-shareable, which matters if the point is eventually to show someone the datacenter
-evidence.
-
-## 6. A public URL over Tailscale Funnel
-
-You already funnel another project at the root of `https://truenas-scale.tail4c32e5.ts.net/`.
-Funnel only listens on **443, 8443 or 10000**, and 443's root is taken, so put the
-dashboard on 8443:
-
-```bash
-tailscale funnel --bg --https=8443 http://127.0.0.1:8081
-tailscale funnel status
-```
-
-That gives `https://truenas-scale.tail4c32e5.ts.net:8443/`.
-
-**Why a separate port rather than a path under 443.** The generated pages use only
-relative links and inline every asset, so they work fine under a path prefix -- but
-only when the URL carries a trailing slash. `.../infra/` resolves
-`waterfall_full.html` correctly; `.../infra` resolves it against the site root and
-404s. A port sidesteps that whole class of bug. If you prefer the tidier URL:
-
-```bash
-tailscale serve --bg --set-path=/infra http://127.0.0.1:8081
-```
-
-and always share the trailing-slash form.
-
-Funnel relays through Tailscale's edge, so your home IP is never exposed, and the
-`web` container binds to `127.0.0.1` so the only way in is through Tailscale.
-
-> **Do not funnel the Pi's `statusd` (port 8080).** It has no authentication and
-> exposes host telemetry. It is fine on the tailnet; it is not fine on the internet.
-
-### Optional: its own tailnet hostname instead of :8443
-
-Funnel's three ports are a hard limit on Tailscale's side -- no flag or plan adds
-more. But the limit is per *node*, and every node gets its own MagicDNS name and
-its own 443. So a Tailscale sidecar gives this stack:
-
-```
-https://infra.<tailnet>.ts.net/
-```
-
-Clean root, no port, no trailing-slash caveat, and the pattern repeats for each
-future project on this box.
-
-1. **Tailnet ACLs** -- the tag must exist and be allowed to funnel:
-
-   ```json
-   "tagOwners": { "tag:infra": ["autogroup:admin"] },
-   "nodeAttrs": [ { "target": ["tag:infra"], "attr": ["funnel"] } ]
-   ```
-
-2. **Auth key** -- generate a **reusable, pre-approved, tagged** key
-   (`tag:infra`) in the admin console. Tagged nodes do not expire, so it will not
-   silently drop off in three months.
-
-   Put it in `deploy/truenas/.env` (gitignored -- never commit it):
-
-   ```
-   TS_AUTHKEY=tskey-auth-...
-   ```
-
-   Compose reads `.env` from the compose file's directory, so it is picked up by
-   the commands in section 7 with no extra flags.
-
-3. **Enable it** -- in `docker-compose.yml`, strip the leading `# ` from every
-   line between `BEGIN tailscale-sidecar` and `END tailscale-sidecar`, then on
-   the `web` service comment out `ports` and uncomment `network_mode`.
-
-The state volume matters: without `/var/lib/tailscale` persisted, the container
-registers as a *new* node on every restart and you accumulate `infra-1`,
-`infra-2`... each with a different URL. `TS_USERSPACE=true` avoids needing
-`NET_ADMIN` or `/dev/net/tun`.
-
-Then `tailscale funnel status` on the NAS should list the new node, and the old
-`--https=8443` funnel can be removed with `tailscale funnel --https=8443 off`.
-
-With Funnel live, GitHub Pages becomes optional. Worth keeping both for a while:
-Pages is a CDN-backed mirror that stays up when the NAS or your home connection does
-not, and the Pages URL is already in the repo README and may be bookmarked elsewhere.
-The pipeline pushes to it anyway, so it costs nothing.
-
-## 7. Deploy
+## 3. Deploy
 
 Run it with the Compose CLI from the dataset root, **not** as a TrueNAS *Custom App*.
 The compose file uses relative paths (`build.context: ../..` and `./nginx.conf`), which
@@ -281,12 +101,13 @@ docker compose -f deploy/truenas/docker-compose.yml up -d
 The project is named **`infrasound`**, pinned by `name:` in the compose file rather
 than taken from the directory name (which would make it `truenas`). So
 `docker compose ls` lists it as `infrasound`, its network is `infrasound_default`, and
-`docker compose -p infrasound ps` works from any directory. Both containers use
-`restart: unless-stopped`, so they come back after a NAS reboot.
+`docker compose -p infrasound ps` works from any directory. The container uses
+`restart: unless-stopped`, so it comes back after a NAS reboot.
 
-- Public dashboard: `https://truenas-scale.tail4c32e5.ts.net:8443/` (via Funnel, above)
-- From the NAS itself: `http://127.0.0.1:8081`
-- Logs: `tail -f /mnt/HDD-pool/Projects/Claude/Infrasound/logs/pipeline.log`
+- Logs: `tail -f /mnt/HDD-pool/Projects/Claude/Infrasound/logs/pipeline.log`. A good
+  pull-only run ends `[done] pull-only -- no rebuild`. `rc=23 ... chmod refused by the
+  dataset ACL` is expected and forgiven: rsync always tries to set modes, and the ACL
+  refuses.
 - Run now rather than waiting for 06:15: `docker exec infra-analysis bash deploy/truenas/pipeline.sh`
 
 > **After changing any file in the repo, rebuild before running.** The image
@@ -299,24 +120,35 @@ than taken from the directory name (which would make it `truenas`). So
 >   && docker compose -f deploy/truenas/docker-compose.yml up -d
 > ```
 
-## Turning the GitHub Pages mirror off
+## Optional: rebuild and serve the dashboard here instead
 
-Once the NAS has proved reliable, unset `INFRA_SITE_REPO` in the compose file,
-rebuild, and delete the `infra-nas` deploy key from the site repo. The dashboard
-then lives only at the Funnel URL.
+Only one machine should build the dashboard. Otherwise one of the two sites silently
+goes stale. To move the rebuild onto the NAS:
 
-## 8. Retire the Pi's copy of this job
+1. On the Pi: `sudo systemctl disable --now infra-dashboard.timer` and
+   `sudo tailscale funnel --https=443 off`.
+2. Copy `config.toml` here from `config.example.toml`, with the Pi's station identity
+   and `archive = "/data/archive"`. `config.py` reads `$INFRASOUND_CONFIG`, which the
+   image sets to `/data/config.toml`.
+3. Copy the Pi's grid cache (`analysis/grid_full.npz` + `grid_full.psd.f32`) into
+   `analysis/` here. Or seed a new one, **starting at 2026-08-04**, the date the sensor
+   moved to a quieter spot (pooling both sides would mix two acoustic environments):
 
-Once a NAS rebuild has published successfully:
+   ```bash
+   docker compose -f deploy/truenas/docker-compose.yml run --rm analysis \
+       python -m infrasound_monitor.waterfall /data/archive \
+         --start 2026-08-04 --end $(date -u +%Y-%m-%d) \
+         --cache /data/analysis/grid_full.npz --out /tmp/seed.html
+   ```
 
-```bash
-sudo systemctl disable --now infra-dashboard.timer
-```
+4. Set `INFRA_PULL_ONLY: "0"`, rebuild, and start with the web server:
+   `docker compose -f deploy/truenas/docker-compose.yml --profile serve up -d`. nginx
+   serves `site/` on `127.0.0.1:8081`.
+5. Expose it with Tailscale. The NAS's own 443 already funnels bartendro, and Funnel
+   only listens on 443, 8443 and 10000, so use another port:
+   `tailscale funnel --bg --https=8443 http://127.0.0.1:8081`. Tailscale runs as the
+   `ix-tailscale-tailscale-1` app container, so prefix with
+   `docker exec ix-tailscale-tailscale-1`. Point the README's dashboard link at the new URL.
 
-**Do not leave both publishing** — two force-pushes to the same Pages repo overwrite
-each other and the site flip-flops between fresh and stale.
-
-Afterwards the Pi needs no outbound credentials at all: delete its deploy key from the
-site repo on GitHub, and remove `~/.ssh/infra_site*` and the `github-infra-site` block
-from `~/.ssh/config`. Its `--backup` timer is also redundant once the NAS is pulling,
-though keeping the USB copy as a third one costs nothing.
+> **Never funnel the Pi's `statusd` (port 8080).** It has no authentication and
+> exposes host telemetry. It is fine on the tailnet; it is not fine on the internet.

@@ -30,7 +30,7 @@ import matplotlib.dates as mdates
 from scipy.ndimage import median_filter
 
 from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
-from infrasound_monitor.psd import compute_grid, save_grid, load_grid, iter_blocks
+from infrasound_monitor.psd import compute_grid, save_grid, load_grid, iter_blocks, have_mask
 
 
 def _parse_date(s: str) -> dt.datetime:
@@ -78,36 +78,14 @@ def quiet_window(times, freqs, psd, have, nhours: int):
     return best[1], diurnal          # idx is consecutive (start..start+n), wraps
 
 
-def night_dates_matrix(times, resid, have, night_hours):
-    """Average the per-hour residual over each night -> one column per night."""
-    anchor = night_hours[0]
-    hours_utc = np.array([t.hour for t in times])
-    nmask = np.isin(hours_utc, night_hours) & have
-    # assign each night-hour to a night label = date of (t - anchor hours)
-    labels = [(t - dt.timedelta(hours=anchor)).date() for t in times]
-    udates = sorted({labels[i] for i in range(len(times)) if nmask[i]})
-    idx = {d: k for k, d in enumerate(udates)}
-    nfreq = resid.shape[1]
-    out = np.full((len(udates), nfreq), np.nan)
-    acc = {d: [] for d in udates}
-    for i in range(len(times)):
-        if nmask[i]:
-            acc[labels[i]].append(resid[i])
-    for d, rows in acc.items():
-        if rows:
-            out[idx[d]] = np.nanmean(np.vstack(rows), axis=0)
-    day_dt = [dt.datetime(d.year, d.month, d.day) for d in udates]
-    return out, day_dt, nmask
-
-
 def night_day_stats(times, freqs, psd, have, night_hours, baseline_hz=1.0, thr=6.0):
     """Night-only waterfall plus night/day tone persistence, in one streaming pass.
 
-    Gives the same results as ``tone_residual`` + ``night_dates_matrix`` + the
-    ``resid > thr`` fractions, but works a block of hours at a time, so memory is
-    set by the block and the number of nights rather than the length of the
-    record.  (The residual is per hour -- the median filter spans frequency only --
-    so a block computes exactly what the whole grid would.)
+    Each night's column is the mean residual over its night hours.  Works a block
+    of hours at a time, so memory is set by the block and the number of nights
+    rather than the length of the record.  (The residual is per hour -- the
+    median filter spans frequency only -- so a block computes exactly what the
+    whole grid would.)
 
     Returns (night_wf, day_dt, nmask, pn, pd): pn/pd are, per frequency, the
     fraction of night/day data hours more than ``thr`` dB above background."""
@@ -175,10 +153,8 @@ def render_nightly(day_dt, freqs, night_wf, out_png: Path, seed: str, vmax: floa
     fig.savefig(str(out_png), dpi=120); plt.close(fig)
 
 
-def report_night_vs_day(resid, freqs, times, night_mask, have, thr, topn=10):
+def report_night_vs_day(pn, pd_, freqs, night_mask, have, topn=10):
     day_mask = have & ~night_mask
-    pn = np.mean(resid[night_mask] > thr, axis=0) if night_mask.any() else np.zeros(len(freqs))
-    pd_ = np.mean(resid[day_mask] > thr, axis=0) if day_mask.any() else np.zeros(len(freqs))
     diff = pn - pd_
     order = np.argsort(diff)[::-1][:topn]
     print(f"\nnight hours: {int(night_mask.sum())}   day hours: {int(day_mask.sum())}")
@@ -246,11 +222,8 @@ def main(argv=None):
             save_grid(grid, a.cache); print(f"cached grid -> {a.cache}")
 
     times = list(grid["times"]); freqs = np.asarray(grid["freqs"], float)
-    psd = np.asarray(grid["psd_db"], float)
-    resid, win = tone_residual(psd, freqs, a.baseline_hz)
-    print(f"baseline: rolling median over {win} freq bins (~{a.baseline_hz:.2f} Hz)")
-
-    have = np.isfinite(psd).all(axis=1)
+    psd = grid["psd_db"]                 # may be a memory map; --night streams over it
+    have = have_mask(psd)
     analysis = Path(a.archive).parent / "analysis"
 
     if a.night:
@@ -260,13 +233,16 @@ def main(argv=None):
                        f"~ {min(loc):02d}:00-{(max(loc)+1)%24:02d}:00 local")
         print(f"auto night window (quietest {a.night_window} h): UTC {night_hours} "
               f"~ local {sorted(loc)}  [{local_label}]")
-        night_wf, day_dt, nmask = night_dates_matrix(times, resid, have, night_hours)
+        night_wf, day_dt, nmask, pn, pd_ = night_day_stats(
+            times, freqs, psd, have, night_hours, a.baseline_hz, a.threshold)
         out = Path(a.out) if a.out else analysis / f"nightwaterfall_{cfg.seed_id}.png"
         out.parent.mkdir(parents=True, exist_ok=True)
         render_nightly(day_dt, freqs, night_wf, out, cfg.seed_id, min(a.vmax, 6.0), local_label)
         print(f"wrote {out}  ({len(day_dt)} nights)")
-        report_night_vs_day(resid, freqs, times, nmask, have, a.threshold)
+        report_night_vs_day(pn, pd_, freqs, nmask, have)
     else:
+        resid, win = tone_residual(np.asarray(psd, float), freqs, a.baseline_hz)
+        print(f"baseline: rolling median over {win} freq bins (~{a.baseline_hz:.2f} Hz)")
         out = Path(a.out) if a.out else analysis / f"tonewaterfall_{cfg.seed_id}.png"
         out.parent.mkdir(parents=True, exist_ok=True)
         render(times, freqs, resid, out, cfg.seed_id, a.vmax)

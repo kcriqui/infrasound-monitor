@@ -110,7 +110,8 @@ def main(argv=None):
     def update(_):
         draw(ax, load_live(a.live_file), a.window, a.row, a.utc_offset)
 
-    ani = FuncAnimation(fig, update, interval=int(a.interval * 1000), cache_frame_data=False)
+    # Must stay referenced: an unreferenced FuncAnimation is garbage-collected and stops.
+    ani = FuncAnimation(fig, update, interval=int(a.interval * 1000), cache_frame_data=False)  # noqa: F841
     plt.tight_layout()
     plt.show()
 

@@ -2,9 +2,9 @@
 archive/
 analysis/
 site/
+site.building/
 references/
 data file decoding/
-claude-memory/
 **/__pycache__/
 *.egg-info/
 .venv/
@@ -14,7 +14,6 @@ claude-memory/
 # keys and runtime state. None of it belongs in the image; /data is mounted.
 .ssh/
 logs/
-tailscale/
 legacy/
 config.toml
 deploy/truenas/.env

@@ -18,23 +18,20 @@ analysis/
 waterfall*.html
 *.png
 !docs/*.png
-sniff_capture*.bin
 
 # Per-deployment local config (copy config.example.toml -> config.toml) and live buffer
 config.toml
 live.npz
 live.npz.tmp
 
-# Deploy logs and the generated public site
+# Deploy logs and the generated public site (+ publish.sh's scratch build dir)
 deploy/*.log
 site/
+site.building/
 
 # Reference material & prior scratch that lives alongside the code (kept on disk)
 *.pdf
 data file decoding/
-
-# Claude assistant memory export (personal; synced via Drive, not committed)
-claude-memory/
 
 # OS / editor
 .DS_Store
@@ -42,12 +39,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Tailscale auth key for the optional sidecar -- never commit
+# Local compose overrides (e.g. INFRA_UID) -- never commit
 deploy/truenas/.env
 
 # TrueNAS dataset root (the clone lives there, beside its data): ssh keys, the
-# pipeline log, the sidecar's node state, and archived pre-NAS material
+# pipeline log, and archived pre-NAS material
 .ssh/
 logs/
-tailscale/
 legacy/

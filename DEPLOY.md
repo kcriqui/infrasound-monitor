@@ -2,17 +2,12 @@
 
 You need an **[Infiltec INFRA20](https://www.infiltec.com/Infrasound@home/)** on a
 serial/USB port, a Linux machine with **Python 3.10+** and systemd, and ideally a
-Raspberry Pi. There are two ways to run it:
-
-| Setup | Acquires | Analyses + serves | Guide |
-|---|---|---|---|
-| **Raspberry Pi** (this station) | the Pi | the Pi | [Raspberry Pi](#raspberry-pi-this-stations-build) |
-| Pi + analysis server | the Pi | an always-on box, e.g. TrueNAS SCALE | Pi section, then [deploy/truenas/README.md](deploy/truenas/README.md) |
+Raspberry Pi. The Pi does everything: it acquires, rebuilds the dashboard nightly and
+serves it.
 
 This station's TrueNAS server also pulls the Pi's archive every night as a snapshotted
-backup ([deploy/truenas/README.md](deploy/truenas/README.md)). From Oct 10 to 29, 2026 it
-did the rebuild too, because the rebuild's memory then grew with the record and had
-outgrown the 1 GB Pi. That's fixed (see "What a 1 GB Pi can carry" below).
+backup ([deploy/truenas/README.md](deploy/truenas/README.md)). Any machine that can run
+a daily `rsync` over ssh could do the same.
 
 Until July 2026 the station ran on a Windows PC with AmaSeis. Windows support was
 removed in October 2026; the old `.Z` archive converts with `infra-convert`.
@@ -49,9 +44,6 @@ cp config.example.toml config.toml       # edit: port = "/dev/ttyUSB0", coordina
 
 # Full build: acquisition + daily dashboard + Mini PiTFT display + swap + nightly backup
 bash deploy/setup.sh --dashboard --display --swap --status --backup user@nas:/infra-backup
-
-# Acquisition-only Pi (analysis on another machine, which pulls the archive over ssh)
-bash deploy/setup.sh --display --status --backup /mnt/usb/infra-backup
 
 sudo systemctl start infra-acquire       # start after editing a freshly-created config
 sudo reboot                              # once, so dialout/spi/gpio groups + SPI apply
@@ -91,8 +83,7 @@ so on a 1 GB Pi swap is a safety margin rather than a requirement. It also cover
 ad-hoc tools, which are not streamed: `tools/analyze.py` (a PPSD from the raw
 archive), and the standalone `tools/report.py` and `tools/tonehunt.py`, which compute
 full-resolution tone residuals. `--swap` bumps the swapfile to 2 GB. Each nightly
-run only processes the *new* hours, appending them to the grid cache in place. An
-acquisition-only Pi doesn't need `--swap`.
+run only processes the *new* hours, appending them to the grid cache in place.
 
 ### `--display` — Mini PiTFT 1.14" status screen
 
@@ -161,9 +152,9 @@ echo "UUID=<uuid>  /mnt/usb  ext4  defaults,nofail,noatime  0  2" | sudo tee -a 
 sudo mount -a && sudo chown "$USER":"$USER" /mnt/usb
 ```
 
-If an analysis server pulls the archive (the TrueNAS stack does, with no `--delete`, onto
-ZFS with snapshots), that pull is your off-Pi backup. A USB stick then serves as a cheap
-third copy.
+If another machine pulls the archive ([deploy/truenas/](deploy/truenas/README.md) does,
+with no `--delete`, onto ZFS with snapshots), that pull is your off-Pi backup. A USB
+stick then serves as a cheap third copy.
 
 Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already installed,
 `sudo systemctl start infra-backup` to test). Confirm the nightly schedule with
@@ -203,10 +194,6 @@ Use `tailscale serve` instead of `funnel` to keep it on your tailnet only. The n
 needs the `funnel` attribute in the tailnet policy (the default policy grants it to
 members). Funnel serves only that folder. **Never funnel the status page (port 8080):**
 it has no authentication.
-
-> **Only one machine should build the dashboard.** If the rebuild ever moves (Pi →
-> analysis server), disable the Pi's straight away:
-> `sudo systemctl disable --now infra-dashboard.timer`.
 
 ### Test a new Pi before you move the sensor (avoid a data gap)
 
@@ -380,7 +367,7 @@ curl -s localhost:8080/status.json      # age_s small, today_mb climbing
 ```
 
 Let one nightly rebuild run (`deploy/publish.log` should end `[publish] rebuilt`, and
-the analysis server's next pull should succeed), then
+any backup pull should still succeed), then
 **keep the SD card untouched** as a rollback — two-minute recovery if the SSD misbehaves,
 and a point-in-time snapshot of the archive. Because this is a clone, the hostname, SSH
 host keys, VPN identity (and its Funnel setting), `authorized_keys` and systemd units
@@ -433,5 +420,4 @@ are plain Python and also run on a desktop against a copy of the archive.
 - **One tree.** Everything lives under the project folder: code, `config.toml`, the
   `archive/`, `analysis/`, and generated `site/`. On the acquiring machine, put it on a
   **local** disk (not a network or cloud-synced folder) so the 24/7 daemon writes
-  reliably. An analysis server keeps the same shape, with the clone as its dataset root
-  and the archive pulled into it.
+  reliably.

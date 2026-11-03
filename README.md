@@ -19,8 +19,7 @@ is calibrated, self-describing, and portable.
 
 > **Setting it up on your own machine?** See **[DEPLOY.md](DEPLOY.md)**: a Raspberry Pi
 > (`deploy/setup.sh`), which runs everything including the nightly analysis even with
-> 1 GB. Optionally, an always-on server can
-> pull the archive as a snapshotted backup, or take over the analysis
+> 1 GB. Optionally, an always-on server can pull the archive as a snapshotted backup
 > ([deploy/truenas/README.md](deploy/truenas/README.md)).
 
 ## Why these formats
@@ -222,7 +221,7 @@ python tools/transients.py ~/infra-archive \
 - [x] Analysis — spectral waterfall, PPSD, station report, night tone-hunt, event explorer
 - [x] Public, auto-updating dashboard, rebuilt and served by a 1 GB Pi in flat memory
 - [x] Turnkey deploy: Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
-      and a TrueNAS SCALE analysis stack that pulls from the Pi (`deploy/truenas/`)
+      and a TrueNAS SCALE job that pulls the archive as a backup (`deploy/truenas/`)
 - [ ] One-command before/after comparison for when the datacenter energises
 - [ ] G-weighting (ISO 7196) for health-threshold context
 - [ ] Event attribution — correlate transients with train (GTFS) + aircraft (ADS-B) data
@@ -246,7 +245,7 @@ tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dash
                  sim_infra20.py (synthetic serial source for hardware-free testing)
 deploy/          setup.sh (--dashboard/--display/--swap/--backup) + backup.sh
                  + *.service / *.timer  (systemd: acquire / dashboard / display / status / backup)
-                 truenas/ Docker stack: pull the archive from the Pi as a backup (optionally rebuild)
+                 truenas/ pull.sh: a daily NAS cron job that pulls the archive as a backup
 config.example.toml  copy to config.toml (git-ignored) and edit for your station
-DEPLOY.md        deployment guide (Raspberry Pi + optional analysis server)
+DEPLOY.md        deployment guide
 ```

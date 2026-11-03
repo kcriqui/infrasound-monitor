@@ -39,11 +39,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Local compose overrides (e.g. INFRA_UID) -- never commit
+# The NAS pull job's settings (the Pi's address) -- never commit
 deploy/truenas/.env
 
 # TrueNAS dataset root (the clone lives there, beside its data): ssh keys, the
-# pipeline log, and archived pre-NAS material
+# pull log, and archived pre-NAS material
 .ssh/
 logs/
 legacy/

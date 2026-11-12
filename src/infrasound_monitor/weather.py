@@ -201,6 +201,8 @@ def update(station: str, product: str, start: dt.date | None = None,
         newest = _newest(path)
         if newest:
             start = dt.date.fromisoformat(newest[:10]) - dt.timedelta(days=REFETCH_DAYS[product])
+        elif path.exists():         # fetched before and empty: the station lacks this product
+            start = today - dt.timedelta(days=REFETCH_DAYS[product])
         else:
             start = _first_archive_day() or today - dt.timedelta(days=30)
     added = 0

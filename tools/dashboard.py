@@ -24,7 +24,9 @@ import matplotlib.dates as mdates
 
 import report          # sibling tool (tools/ is on sys.path when run as a script)
 import tonehunt        # sibling tool
-from infrasound_monitor.config import StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS
+import compare         # sibling tool
+from infrasound_monitor.config import (StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS,
+                                        WEATHER_STATIONS, CHANGE_DATE)
 from infrasound_monitor.psd import build_cache, load_grid, have_mask
 from infrasound_monitor.waterfall import _decimate_time
 
@@ -128,8 +130,10 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
                 span_days=(end - start).days, peak_pct=peak_pct,
                 night_label=night_label,
                 overall=next((b for b in bands if b["band"].startswith("0.05–20")), None))
+    change_html = _change_section(grid, night_label)
     html = _render(cfg, start, end, meta, kpis, tone_rows, bands, imgs, thr,
-                   has_interactive=(Path(out_html).parent / "waterfall_full.html").exists())
+                   has_interactive=(Path(out_html).parent / "waterfall_full.html").exists(),
+                   change_html=change_html)
     Path(out_html).parent.mkdir(parents=True, exist_ok=True)
     Path(out_html).write_text(html, encoding="utf-8")
     print(f"wrote {out_html}")
@@ -137,6 +141,55 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
           f"tone peak {peak_pct:.0f}% -> "
           f"{'tone-free' if peak_pct < 50 else 'possible tone'}")
     return out_html
+
+
+def _change_section(grid, night_label):
+    """The wind-matched before/after section, or a note saying what it needs.
+    Never fails the page: the rest of the dashboard is worth publishing anyway."""
+    head = '<section>\n    <p class="eyebrow">Change monitor · wind-matched</p>\n'
+    if not WEATHER_STATIONS:
+        return (head + '    <h2>Before / after</h2>\n    <p class="cap">Needs a wind record: set '
+                '<code>[weather] stations</code> in config.toml (see README).</p>\n  </section>')
+    try:
+        res = compare.analyse(grid, dt.datetime.fromisoformat(CHANGE_DATE) if CHANGE_DATE else None)
+    except Exception as e:                       # bad weather file, too little data, ...
+        print(f"  change monitor skipped: {e}")
+        return ""
+    if not res["n_after"] or not res["n_before"]:
+        return (head + '    <h2>Before / after</h2>\n    <p class="cap">Not enough hours with '
+                'weather data on both sides of the split yet.</p>\n  </section>')
+    if res["mode"] == "recent":
+        title = f"Last {res['recent_days']} days against the baseline"
+        lead = ("No change date is set yet, so this compares the most recent days with "
+                "everything before them: a running check that the background is stable.")
+    else:
+        title = f"Since {res['split']:%Y-%m-%d} against before"
+        lead = f"Hours from {res['split']:%Y-%m-%d} (UTC) on are compared with all earlier hours."
+    rows = "".join(
+        f'<tr><td>{lab}</td><td class="num">{res["delta"][j]:+.1f}</td>'
+        f'<td class="num">{res["lo"][j]:+.1f} … {res["hi"][j]:+.1f}</td>'
+        f'<td class="num">{res["raw"][j]:+.1f}</td></tr>'
+        for j, lab in enumerate(res["labels"]))
+    stations = ", ".join(res["stations"])
+    img = report._fig_b64(compare.figure(res))
+    return f"""{head}    <h2>{title}</h2>
+    <p class="cap">{lead} Wind is the main cause of level changes here, so each octave band
+    is compared at equal wind: the earlier night hours ({night_label}) give the level the
+    baseline had at each wind speed (mean wind at {stations}), and each later hour is
+    measured against that at its own wind. Rainy hours are left out.</p>
+    <details class="explain"><summary>How to read this</summary>
+    <p>A new steady source would show as a positive change whose 90% interval stays above
+    zero, in the same bands, as more nights accumulate. The grey rings are the raw change
+    without wind matching; the gap between ring and dot is how much of the raw change was
+    weather. Seasonal sources still show: ocean microbaroms grow from September, which lifts
+    the lowest bands. The interval comes from resampling whole nights.
+    {res['n_after']} later and {res['n_before']} earlier night hours,
+    {res['coverage']*100:.0f}% of the later ones within the baseline's range of wind.</p></details>
+    <div class="figure"><img alt="wind-matched change per band" src="{img}"></div>
+    <table class="below"><thead><tr><th>Band</th><th class="num">Change dB</th>
+    <th class="num">90% interval</th><th class="num">Raw dB</th></tr></thead>
+    <tbody>{rows}</tbody></table>
+  </section>"""
 
 
 def _station_meta(archive):
@@ -161,7 +214,8 @@ def _tile(label, value, sub="", state=""):
             f'<div class="tile-val">{value}</div>{sub}</div>')
 
 
-def _render(cfg, start, end, meta, k, tone_rows, bands, imgs, thr, has_interactive):
+def _render(cfg, start, end, meta, k, tone_rows, bands, imgs, thr, has_interactive,
+            change_html=""):
     now = dt.datetime.now()
     tone_free = k["peak_pct"] < 50
     verdict_state = "ok" if tone_free else "warn"
@@ -312,6 +366,8 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
       <th class="num">Δ pts</th></tr></thead><tbody>{tone_tbl}</tbody></table>
     </div>
   </section>
+
+  {change_html}
 
   <section>
     <p class="eyebrow">Overview</p>

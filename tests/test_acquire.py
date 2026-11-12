@@ -78,6 +78,90 @@ def test_real_dropout_becomes_an_explicit_gap(tmp_path):
     assert gaps[0][6] > 25.0                            # gap duration ~30 s
 
 
+def _sensor(n, t0, rate_fn, latency, seed=1):
+    """Arrival times of n samples from a free-running clock: sample i is taken at
+    the integral of 1/rate, then delayed by a random latency."""
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rate = rate_fn(idx)
+    taken = t0 + np.concatenate([[0.0], np.cumsum(1.0 / rate[:-1])])
+    return taken, taken + rng.uniform(0.0, latency, n)
+
+
+def _pieces(arch):
+    from infrasound_monitor.waveforms import pieces
+    return pieces(_read_raw(arch))
+
+
+def _read_raw(arch):
+    st = Stream()
+    for f in sorted(arch.rglob(f"{DEFAULT_STATION.network}.{DEFAULT_STATION.station}*")):
+        st += read(str(f))
+    return st
+
+
+def test_drifting_sensor_clock_leaves_no_gaps_and_keeps_time(tmp_path):
+    """The real sensor's rate wanders with temperature, here by 3e-5 either way
+    of the nominal.  The old writer cut a fake 2 s gap whenever the drift reached
+    gap_tol; now the run must stay one gap-free trace and stay on time."""
+    arch = tmp_path / "archive"
+    w = SdsWriter(arch, DEFAULT_STATION, fs=51.422, flush_seconds=300, verbose=False)
+    n = int(4 * 3600 * 51.42)                                     # 4 hours
+    t0 = UTCDateTime(2026, 11, 10, 3).timestamp
+    wander = lambda i: 51.4219 + 0.0015 * np.sin(2 * np.pi * i / (3 * 3600 * 51.42))
+    taken, arrive = _sensor(n, t0, wander, latency=0.016)
+    for i in range(n):
+        w.add(i % 200, arrive[i])
+    w.flush()
+
+    st = _read_raw(arch)
+    assert len(st) == 1, f"ObsPy must see one trace, got {len(st)}"   # rates kept in band
+    st.merge(method=1)                                               # must not raise
+    ps = _pieces(arch)
+    assert len(ps) == 1 and len(ps[0].data) == n                    # nothing lost or added
+    # The archive's clock: the next segment would start at w.seg_start.  Compare with
+    # when sample n was really taken (one more sample period after the last).
+    true_end = taken[-1] + 1.0 / wander(np.array([n - 1]))[0]
+    assert abs(w.seg_start - true_end) < 0.05, w.seg_start - true_end
+    assert abs(UTCDateTime(t0) - st[0].stats.starttime) < 0.02     # first sample on time
+
+
+def test_rate_far_from_nominal_converges_with_a_logged_correction(tmp_path, capsys):
+    """A badly configured nominal rate (0.1% off) is outside the rate band, so the
+    writer re-anchors once, then tracks the real rate."""
+    arch = tmp_path / "archive"
+    w = SdsWriter(arch, DEFAULT_STATION, fs=51.48, flush_seconds=300, verbose=False)
+    n = int(2 * 3600 * 51.42)
+    t0 = UTCDateTime(2026, 11, 10, 3).timestamp
+    taken, arrive = _sensor(n, t0, lambda i: np.full(len(i), 51.42), latency=0.016)
+    for i in range(n):
+        w.add(0, arrive[i])
+    w.flush()
+    assert "timing correction" in capsys.readouterr().out
+    assert abs(w.fs_true - 51.42) < 0.002
+    assert abs(w.seg_start - (taken[-1] + 1 / 51.42)) < 0.05
+    assert len(_pieces(arch)) == 1                         # a correction is not a gap
+
+
+def test_reader_stall_with_buffered_samples_is_not_a_gap(tmp_path):
+    """Samples held up 6 s (a stalled reader, the tty buffering them) and then
+    delivered in a burst were not lost, so they must not end the run."""
+    arch = tmp_path / "archive"
+    w = SdsWriter(arch, DEFAULT_STATION, fs=FS, flush_seconds=3600, verbose=False)
+    n = int(120 * FS)
+    t0 = UTCDateTime(2026, 11, 10, 3).timestamp
+    taken = t0 + np.arange(n) / FS
+    arrive = taken.copy()
+    stall = (taken > t0 + 60) & (taken < t0 + 66)
+    arrive[stall] = t0 + 66 + np.arange(stall.sum()) * 1e-4         # the burst
+    for i in range(n):
+        w.add(1, arrive[i])
+    w.flush()
+    ps = _pieces(arch)
+    assert len(ps) == 1 and len(ps[0].data) == n
+    assert not _read_raw(arch).get_gaps()
+
+
 def test_utc_midnight_splits_into_two_day_files(tmp_path):
     arch = tmp_path / "archive"
     w = SdsWriter(arch, DEFAULT_STATION, fs=FS, flush_seconds=3600)

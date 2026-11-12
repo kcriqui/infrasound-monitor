@@ -104,14 +104,17 @@ def test_sigterm_flushes_buffered_samples_instead_of_dropping_them(tmp_path, mon
         pytest.skip("POSIX signal delivery required")
 
     counts = iter([b"%d\r\n" % v for v in range(500)])
+    sent = []
 
     class _FeedThenSigterm(_SilentPort):
         def readline(self):
             try:
                 return next(counts)
             except StopIteration:
-                os.kill(os.getpid(), signal.SIGTERM)   # as systemd would
-                return b"0\r\n"
+                if not sent:                           # once, as systemd would
+                    sent.append(1)
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return b""
 
     _install_fake_serial(monkeypatch, _FeedThenSigterm)
     # flush_seconds far larger than the run, so nothing flushes on its own:

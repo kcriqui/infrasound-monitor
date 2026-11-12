@@ -43,12 +43,13 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy import signal as sig
 from scipy.ndimage import median_filter
-from obspy import UTCDateTime
+from obspy import Trace, UTCDateTime
 from obspy.clients.filesystem.sds import Client
 from obspy.signal.trigger import classic_sta_lta, trigger_onset
 
 from infrasound_monitor.config import (StationConfig, DEFAULT_STATION, PA_PER_COUNT,
                                         UTC_OFFSET_HOURS)
+from infrasound_monitor.waveforms import get_pieces
 
 # label -> (short description, plot color). Heuristic categories; thresholds in
 # classify() are calibrated to indoor data and may need adjusting at a quiet site.
@@ -120,29 +121,31 @@ def detect(cli, cfg, start, end, band, sta, lta, thr_on, thr_off,
     day = dt.datetime(start.year, start.month, start.day)
     while day < end:
         t0 = UTCDateTime(day.year, day.month, day.day)
-        st = cli.get_waveforms(cfg.network, cfg.station, cfg.location, cfg.channel,
-                               t0, t0 + 86400)
-        if st:
-            st.merge(method=1, fill_value=0)
-            tr = max(st, key=lambda x: x.stats.npts)
-            fs = tr.stats.sampling_rate
+        n0 = 0
+        # Each contiguous piece on its own: zero-filling a gap would put a step in
+        # the band-passed signal, which STA/LTA reports as an event.
+        for pc in get_pieces(cli, cfg, t0, t0 + 86400):
+            fs = pc.fs
+            if len(pc.data) < 2 * int(lta * fs):
+                continue
+            tr = Trace(data=pc.data.astype(float))
+            tr.stats.sampling_rate = fs
             tr.detrend("demean")
             tr.filter("bandpass", freqmin=band[0], freqmax=band[1], corners=4)
-            x = tr.data.astype(float) * PA_PER_COUNT
+            x = tr.data * PA_PER_COUNT
             cft = classic_sta_lta(x, int(sta * fs), int(lta * fs))
-            n0 = 0
             for on, off in trigger_onset(cft, thr_on, thr_off):
                 dur = (off - on) / fs
                 if not (min_dur <= dur <= max_dur):
                     continue
-                ev = dict(t=tr.stats.starttime.datetime + dt.timedelta(seconds=on / fs),
-                          dur=dur)
+                ev = dict(t=dt.datetime.fromtimestamp(pc.start + on / fs, dt.timezone.utc)
+                          .replace(tzinfo=None), dur=dur)
                 ev.update(characterize(x[on:off], fs))
                 ev["cls"] = classify(ev)
                 events.append(ev)
                 n0 += 1
-            if verbose:
-                print(f"  {day.date()}: {n0} events", flush=True)
+        if verbose:
+            print(f"  {day.date()}: {n0} events", flush=True)
         day += dt.timedelta(days=1)
     return events
 
@@ -189,13 +192,12 @@ def _b64(fig):
 
 def _thumb(cli, cfg, ev):
     t0 = UTCDateTime(ev["t"]) - 30
-    st = cli.get_waveforms(cfg.network, cfg.station, cfg.location, cfg.channel,
-                           t0, t0 + ev["dur"] + 120)
-    if not st:
+    ps = get_pieces(cli, cfg, t0, t0 + ev["dur"] + 120)
+    if not ps:
         return ""
-    st.merge(method=1, fill_value=0); tr = max(st, key=lambda x: x.stats.npts)
-    fs = tr.stats.sampling_rate
-    x = tr.data.astype(float) * PA_PER_COUNT; x -= x.mean()
+    pc = max(ps, key=lambda p: len(p.data))
+    fs = pc.fs
+    x = pc.data.astype(float) * PA_PER_COUNT; x -= x.mean()
     f, tt, Sxx = sig.spectrogram(x, fs=fs, nperseg=256, noverlap=224)
     fig, ax = plt.subplots(figsize=(3.2, 1.6))
     ax.pcolormesh(tt, f, 10 * np.log10(Sxx + 1e-20), shading="nearest",

@@ -12,23 +12,26 @@ by a fraction of a second of zeros while the 0.05 Hz high-pass filter settles;
 
 What this daemon does
 ---------------------
-* Timestamps each sample from the **system clock as it arrives** (more accurate
-  than AmaSeis's hour binning).
-* Places samples on a fixed-rate clock anchored to the first sample of each
-  contiguous *run*, so a run is gap-free and single-rate -- exactly what a real
-  datalogger produces and what merges cleanly in ObsPy/Swarm.  A genuine serial
-  dropout (gap > ``gap_tol``) ends the run and starts a new one, leaving an
-  explicit gap.
+* A reader thread does nothing but read the port and stamp each sample with the
+  **system clock as it arrives**.  Writing happens on the main thread, so a slow
+  disk delays the write, not the timestamps.
+* The sensor's sample clock free-runs: about 51.42 sps, wandering by ~1e-4 with
+  temperature.  :class:`SdsWriter` measures it continuously and gives every
+  flushed segment its measured rate, so segments abut exactly, timestamps follow
+  the (NTP-disciplined) system clock to a few ms, and the samples stay raw.
+* A genuine serial dropout -- samples lost, not merely delivered late -- ends the
+  run and starts a new one, leaving an explicit gap.
 * Appends completed segments to the SeisComP Data Structure (SDS) day file for
   their UTC day, splitting automatically at UTC midnight, and (re)writes
   ``station.xml`` alongside the archive.
 
-Only one program can hold the COM port, so this REPLACES AmaSeis on that machine.
-A future step can additionally serve the archive over SeedLink for live views.
+Only one program can hold the serial port.  A future step can additionally serve
+the archive over SeedLink for live views.
 """
 from __future__ import annotations
 import argparse
 import datetime as dt
+import math
 import time
 from pathlib import Path
 
@@ -60,98 +63,212 @@ def parse_line(line: bytes):
     return None
 
 
-class SdsWriter:
-    """Accumulate samples on a fixed-rate clock and append them to the SDS archive.
+LATENCY_BLOCK = 256      # samples (~5 s) per earliest-arrival block of the clock estimate
+CONFIRM_S = 2.5          # a late stream that flows normally this long, still late, lost data
+MAX_PENDING = 6000       # samples held while deciding (~2 min; the tty buffer holds ~10 s)
+MIN_MEASURE_S = 60.0     # segments shorter than this keep the previous rate
+RATE_BAND = 4e-5         # a day's segment rates stay within this (relative) of its reference
+RATE_LIMIT = 5e-3        # a "measured" rate further than this from nominal is nonsense
 
-    Samples are grouped into *runs* of contiguous data.  Within a run, sample i
-    is timestamped ``run_anchor + i / fs`` so successive flushed segments abut
-    exactly (gap-free, no overlap) and merge into a single trace on read.  A run
-    ends -- and a new one is anchored to wall-clock -- when a real dropout is
-    detected (the next sample arrives more than ``gap_tol`` seconds late) so that
-    genuine outages appear as explicit gaps rather than silently compressed time.
+
+def _utc_day(t: float) -> int:
+    return int(t // 86400)
+
+
+class SdsWriter:
+    """Timestamp samples from their arrival times and append them to the SDS archive.
+
+    Samples are grouped into *runs* of contiguous data, and a run into segments of
+    ``flush_seconds``, each appended to its UTC day file as it completes.
+
+    Timing.  The INFRA20's sample clock free-runs, and the true rate wanders by
+    ~1e-4 with temperature.  Stamping sample i as ``anchor + i / nominal`` (what
+    this class used to do) drifts by seconds a day, and the old cure, starting a
+    new run whenever the drift reached ``gap_tol``, put a fake 2 s gap in the
+    archive every few hours without losing a sample.
+
+    Instead each segment carries its *measured* rate and starts exactly where the
+    previous one ended, so a run is gap-free however the clock wanders:
+
+    * The time a sample was taken is estimated from arrival times.  Arrivals are
+      only ever delayed (USB latency, scheduling), never early, so the earliest
+      arrival relative to the clock model over a ~5 s block marks the model's
+      true offset.  That puts each segment's end within a few ms of UTC.
+    * rate = samples / (estimated end - start).  Rates are held within
+      ``RATE_BAND`` of the UTC day's reference rate, because ObsPy joins abutting
+      records into one trace only while their rates agree to ~1e-4; the band is
+      re-centred on the measured rate at each midnight.  If the clock leaves the
+      band for long enough that the archive's time is off by ``max_drift``, the
+      writer re-anchors on the measured time: a logged timing correction of that
+      size, the only discontinuity a run can contain.
+
+    A real dropout (samples lost, not just late) ends the run.  Samples arriving
+    more than ``gap_tol`` late are held: if the stream catches up (a burst of
+    buffered samples after a stall), nothing was lost and they join the segment;
+    if it flows at its normal pace for ``CONFIRM_S`` and is still late, samples
+    were lost, the run ends and the archive shows an explicit gap.
     """
 
     def __init__(self, archive, cfg: StationConfig = DEFAULT_STATION,
                  fs: float = NOMINAL_FS, flush_seconds: float = 300.0,
-                 gap_tol: float = 2.0, encoding: str = "STEIM2"):
+                 gap_tol: float = 2.0, max_drift: float = 0.5,
+                 encoding: str = "STEIM2", verbose: bool = True):
         self.archive = Path(archive)
         self.cfg = cfg
-        self.fs = fs
+        self.fs_nominal = float(fs)
+        self.fs_ref = float(fs)        # the current UTC day's reference rate
+        self.fs = float(fs)            # rate of the current segment's clock model
+        self.fs_true = float(fs)       # latest measured sensor rate
         self.flush_seconds = flush_seconds
         self.gap_tol = gap_tol
+        self.max_drift = max_drift
         self.encoding = encoding
+        self.verbose = verbose
 
-        self.run_anchor: dt.datetime | None = None  # UTC time of sample 0 of the run
-        self.n_run = 0            # samples added in the current run (incl. buffered)
-        self.n_flushed = 0        # samples of the current run already written
+        self.seg_start: float | None = None  # epoch s of the segment's first sample; None = no run
+        self.seg_exact = False         # True once seg_start continues the previous segment
+        self.true_start = 0.0          # estimated true time of seg_start
         self.buf: list[int] = []
+        self._pending: list[tuple[int, float]] = []
+        self._first_min = math.inf     # earliest arrival offset over a run's first block
+        self._first_n = 0
+        self._reset_minima()
 
         self.archive.mkdir(parents=True, exist_ok=True)
         build_inventory(cfg).write(str(self.archive / "station.xml"),
                                    format="STATIONXML")
 
-    # -- time helpers -------------------------------------------------------
-    def _sample_time(self, index: int) -> dt.datetime:
-        """Wall-clock UTC of sample ``index`` within the current run."""
-        return self.run_anchor + dt.timedelta(seconds=index / self.fs)
+    # -- clock model --------------------------------------------------------
+    def _model(self, k: int) -> float:
+        """Archive time of sample ``k`` of the current segment."""
+        return self.seg_start + k / self.fs
 
-    def _start_new_run(self, when: dt.datetime):
-        self.run_anchor = when
-        self.n_run = 0
-        self.n_flushed = 0
-        self.buf.clear()
+    def _reset_minima(self):
+        self._blk_min, self._blk_n, self._prev_min = math.inf, 0, math.inf
+
+    def _offset(self) -> float:
+        """Earliest recent arrival minus the model: how far the model runs behind."""
+        m = min(self._blk_min, self._prev_min)
+        return 0.0 if m == math.inf else m
+
+    def _start_run(self, t: float):
+        self.seg_start, self.seg_exact = t, False
+        self._first_min, self._first_n = math.inf, 0
+        self._reset_minima()
 
     # -- ingest -------------------------------------------------------------
-    def add(self, count: int, when: dt.datetime):
-        """Add one sample that arrived at wall-clock ``when`` (tz-aware UTC)."""
-        if self.run_anchor is None:
-            self._start_new_run(when)
+    def add(self, count: int, when):
+        """Add one sample that arrived at ``when`` (tz-aware datetime or epoch s)."""
+        t = when.timestamp() if isinstance(when, dt.datetime) else float(when)
+        if self.seg_start is None:
+            self._start_run(t)
+        k = len(self.buf) + len(self._pending)
+        late = t - self._model(k) - self._offset() > self.gap_tol
+        if self._pending:
+            self._pending.append((count, t))
+            if not late:                          # caught up: delayed, not lost
+                self._resolve_pending(lost=False)
+            elif (t - self._pending[0][1] >= CONFIRM_S
+                  or len(self._pending) >= MAX_PENDING):
+                self._resolve_pending(lost=True)  # flowing normally, still late
+            return
+        if late:
+            self._pending = [(count, t)]          # lost samples, or just delayed?
+            return
+        self._append(count, t)
+
+    def _resolve_pending(self, lost: bool):
+        pend, self._pending = self._pending, []
+        if lost:
+            self._close_segment()
+            self.seg_start = None
+            for c, t in pend:
+                self.add(c, t)
         else:
-            # Dropout detection: if this sample arrives well after where the
-            # fixed-rate clock expected it, we lost samples -> close the run.
-            expected = self._sample_time(self.n_run)
-            if (when - expected).total_seconds() > self.gap_tol:
-                self.flush()
-                self._start_new_run(when)
+            for c, t in pend:
+                self._append(c, t)
 
+    def _append(self, count: int, t: float):
+        k = len(self.buf)
         # Split at UTC midnight so a segment never straddles two day files.
-        if self.buf:
-            buf_start_day = self._sample_time(self.n_flushed).date()
-            if self._sample_time(self.n_run).date() != buf_start_day:
-                self.flush()
-
-        self.buf.append(count)
-        self.n_run += 1
-
-        if (self.n_run - self.n_flushed) / self.fs >= self.flush_seconds:
-            self.flush()
+        if k and _utc_day(self._model(k)) != _utc_day(self._model(0)):
+            self._close_segment(new_day=True)
+            k = 0
+        o = t - self._model(k)
+        self.buf.append(int(count))
+        if o < self._blk_min:
+            self._blk_min = o
+        self._blk_n += 1
+        if self._blk_n >= LATENCY_BLOCK:
+            self._prev_min, self._blk_min, self._blk_n = self._blk_min, math.inf, 0
+        if not self.seg_exact and self._first_n < LATENCY_BLOCK:
+            self._first_min = min(self._first_min, o)
+            self._first_n += 1
+        if (k + 1) / self.fs >= self.flush_seconds:
+            self._close_segment()
 
     # -- output -------------------------------------------------------------
-    def flush(self):
-        """Append the buffered segment to its SDS day file (append, never clobber)."""
-        if not self.buf or self.run_anchor is None:
+    def _close_segment(self, new_day: bool = False):
+        n = len(self.buf)
+        if not n:
             return
-        start = self._sample_time(self.n_flushed)
-        tr = _new_trace(np.array(self.buf, dtype=np.int32), start, self.cfg, self.fs)
-        out = sds_path(self.archive, self.cfg, start.year,
-                       int(start.strftime("%j")))
-        out.parent.mkdir(parents=True, exist_ok=True)
+        if self.seg_exact:
+            start = self.seg_start
+        else:                                   # a run's first segment: correct its anchor
+            start = self.seg_start + (0.0 if self._first_min == math.inf else self._first_min)
+            self.true_start = start
+        t_meas = self._model(n) + self._offset()     # when sample n would have been taken
+        fs = self.fs
+        if t_meas - self.true_start >= MIN_MEASURE_S:
+            fs_true = n / (t_meas - self.true_start)
+            fs_fix = n / (t_meas - start)           # the rate that lands this segment on time
+            if abs(fs_true / self.fs_nominal - 1) <= RATE_LIMIT:
+                self.fs_true = fs_true
+                fs = min(max(fs_fix, self.fs_ref * (1 - RATE_BAND)), self.fs_ref * (1 + RATE_BAND))
+        end = start + n / fs
+        self._write(start, fs)
+        self.fs = fs
+        drift = t_meas - end
+        if abs(drift) > self.max_drift:
+            print(f"timing correction: the sensor clock ({self.fs_true:.4f} sps) left the rate "
+                  f"band around {self.fs_ref:.4f}; re-anchoring by {drift:+.3f} s", flush=True)
+            self.fs_ref = self.fs = self.fs_true
+            end = t_meas
+        if new_day:
+            self.fs_ref = self.fs = self.fs_true
+        self.seg_start, self.seg_exact, self.true_start = end, True, t_meas
+        self.buf = []
+        self._reset_minima()
 
-        from obspy import Stream
+    def _write(self, start: float, fs: float):
+        from obspy import Stream, UTCDateTime
+        st_utc = UTCDateTime(start)
+        tr = _new_trace(np.array(self.buf, dtype=np.int32), st_utc, self.cfg, fs)
+        out = sds_path(self.archive, self.cfg, st_utc.year, st_utc.julday)
+        out.parent.mkdir(parents=True, exist_ok=True)
         # miniSEED files are concatenated records, so appending is valid and keeps
         # existing hours intact (Stream.write always overwrites a *path*, so we
         # hand it an append-mode handle instead).
         with open(out, "ab") as fh:
             Stream([tr]).write(fh, format="MSEED", encoding=self.encoding, reclen=512)
+        if self.verbose:
+            print(f"flushed {tr.stats.npts} samples @ {st_utc.isoformat()} "
+                  f"({fs:.5f} sps) -> {out.name}", flush=True)
 
-        self.n_flushed = self.n_run
-        self.buf.clear()
-        print(f"flushed {tr.stats.npts} samples "
-              f"@ {start.isoformat()} -> {out.name}", flush=True)
+    def flush(self):
+        """Write out everything buffered; the run continues seamlessly afterwards."""
+        if self._pending:
+            # Undecided: arriving at the normal pace means late for real (lost samples);
+            # arriving in a burst means buffered.
+            p = self._pending
+            flowing = len(p) > 1 and p[-1][1] - p[0][1] >= 0.5 * (len(p) - 1) / self.fs
+            self._resolve_pending(lost=flowing)
+        self._close_segment()
 
-
-def _now_utc() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    def end_run(self):
+        """Flush and forget the run: the next sample starts a new one (after a reconnect)."""
+        self.flush()
+        self.seg_start = None
 
 
 def _write_live(path, buf, fs, t_end):
@@ -202,9 +319,84 @@ def _catch_sigterm():
         return False
 
 
+_SAMPLE, _RESET, _ERROR = 0, 1, 2      # messages from the reader thread
+
+
+def _reader(port, baud, warmup, reconnect_delay, stall_timeout, max_reconnects, out, stop):
+    """Serial reader thread: stamp each sample on arrival and queue it.
+
+    Nothing here touches the disk, so a slow write on the main thread can delay the
+    archive but never the timestamps.  Reconnects are reported as ``_RESET`` (the
+    writer ends the run); anything fatal, including the watchdogs below, is handed
+    to the main thread as ``_ERROR`` to raise.
+    """
+    import serial
+    fails = 0
+    try:
+        while not stop.is_set():
+            try:
+                with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1,
+                                   timeout=1, rtscts=False, dsrdtr=False) as ser:
+                    _assert_power_lines(ser)
+                    _discard_warmup(ser, warmup)
+                    fails = 0
+                    last_sample = time.time()
+                    while not stop.is_set():
+                        line = ser.readline()
+                        now = time.time()
+                        c = parse_line(line)
+                        if c is None:
+                            # readline timed out, or the line was garbage. Neither
+                            # raises, so this is where a dead sensor hides.
+                            if stall_timeout and now - last_sample > stall_timeout:
+                                raise AcquisitionStalled(
+                                    f"no valid sample for {stall_timeout:.0f}s on {port} "
+                                    f"(port is open, so the sensor or cable is the suspect)")
+                            continue
+                        last_sample = now
+                        out.put((_SAMPLE, c, now))
+            except serial.SerialException as e:
+                # USB glitch / cable pull: end the run and retry.
+                out.put((_RESET, None, None))
+                fails += 1
+                if max_reconnects and fails >= max_reconnects:
+                    raise AcquisitionStalled(
+                        f"{fails} consecutive failures opening {port} "
+                        f"({e}) -- giving up so systemd can restart us") from e
+                print(f"serial error: {e}; reconnecting in {reconnect_delay:.0f}s "
+                      f"(attempt {fails}/{max_reconnects or '-'}) ...", flush=True)
+                stop.wait(reconnect_delay)
+    except BaseException as e:            # incl. KeyboardInterrupt: the main thread decides
+        out.put((_ERROR, e, None))
+
+
+def _hold_stop_signals():
+    """Ignore SIGTERM/SIGINT while the final flush runs; returns the old handlers."""
+    import signal
+    old = {}
+    for name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            old[sig] = signal.signal(sig, signal.SIG_IGN)
+        except (ValueError, OSError):       # not the main thread
+            pass
+    return old
+
+
+def _restore_signals(old):
+    import signal
+    for sig, handler in old.items():
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError, TypeError):
+            pass
+
+
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
         fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 15.0,
-        gap_tol: float = 2.0, reconnect_delay: float = 5.0,
+        gap_tol: float = 2.0, max_drift: float = 0.5, reconnect_delay: float = 5.0,
         live_file=None, live_seconds: float = 600.0,
         stall_timeout: float = 120.0, max_reconnects: int = 20):
     """Acquire from ``port`` into the SDS ``archive`` until interrupted.
@@ -225,60 +417,58 @@ def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 96
     restart us from scratch, which also re-enumerates the serial device.
     Set either to 0 to disable (the old spin-forever behaviour).
     """
-    import serial
+    import queue
+    import threading
     from collections import deque
 
     _catch_sigterm()                    # so a systemd stop flushes instead of dropping
-    writer = SdsWriter(archive, cfg, fs=fs, flush_seconds=flush_seconds, gap_tol=gap_tol)
+    writer = SdsWriter(archive, cfg, fs=fs, flush_seconds=flush_seconds, gap_tol=gap_tol,
+                       max_drift=max_drift)
     live = deque(maxlen=int(live_seconds * fs)) if live_file else None
     last_live = 0.0
-    last_sample = time.time()
-    fails = 0
-    print(f"acquiring {port}@{baud} -> {archive}  ({cfg.seed_id}, {fs:.4f} sps)  "
+    q: queue.SimpleQueue = queue.SimpleQueue()
+    stop = threading.Event()
+    reader = threading.Thread(target=_reader, name="serial-reader", daemon=True,
+                              args=(port, baud, warmup, reconnect_delay, stall_timeout,
+                                    max_reconnects, q, stop))
+    print(f"acquiring {port}@{baud} -> {archive}  ({cfg.seed_id}, nominal {fs:.4f} sps)  "
           f"stall timeout {stall_timeout:.0f}s  Ctrl-C to stop", flush=True)
     try:
+        reader.start()                  # inside try: a stop signal may arrive at once
         while True:
             try:
-                with serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1,
-                                   timeout=1, rtscts=False, dsrdtr=False) as ser:
-                    _assert_power_lines(ser)
-                    _discard_warmup(ser, warmup)
-                    fails = 0
-                    last_sample = time.time()
-                    while True:
-                        line = ser.readline()
-                        c = parse_line(line)
-                        if c is None:
-                            # readline timed out, or the line was garbage. Neither
-                            # raises, so this is where a dead sensor hides.
-                            if stall_timeout and time.time() - last_sample > stall_timeout:
-                                raise AcquisitionStalled(
-                                    f"no valid sample for {stall_timeout:.0f}s on {port} "
-                                    f"(port is open, so the sensor or cable is the suspect)")
-                            continue
-                        now = _now_utc()
-                        last_sample = time.time()
-                        writer.add(c, now)
-                        if live is not None:
-                            live.append(c)
-                            if time.time() - last_live >= 2.0:
-                                _write_live(live_file, live, fs, now)
-                                last_live = time.time()
-            except serial.SerialException as e:
-                # USB glitch / cable pull: flush what we have and retry.
-                writer.flush()
-                fails += 1
-                if max_reconnects and fails >= max_reconnects:
-                    raise AcquisitionStalled(
-                        f"{fails} consecutive failures opening {port} "
-                        f"({e}) -- giving up so systemd can restart us") from e
-                print(f"serial error: {e}; reconnecting in {reconnect_delay:.0f}s "
-                      f"(attempt {fails}/{max_reconnects or '-'}) ...", flush=True)
-                time.sleep(reconnect_delay)
+                kind, a, b = q.get(timeout=1.0)
+            except queue.Empty:
+                if not reader.is_alive():
+                    raise AcquisitionStalled("the serial reader thread exited unexpectedly")
+                continue
+            if kind == _SAMPLE:
+                writer.add(a, b)
+                if live is not None:
+                    live.append(a)
+                    if b - last_live >= 2.0:
+                        _write_live(live_file, live, fs,
+                                    dt.datetime.fromtimestamp(b, dt.timezone.utc))
+                        last_live = b
+            elif kind == _RESET:
+                writer.end_run()
+            else:
+                raise a
     except KeyboardInterrupt:
         pass
     finally:
+        old = _hold_stop_signals()      # a second SIGTERM must not cut the flush short
+        stop.set()
+        reader.join(timeout=3.0)
+        while True:                     # samples the reader queued before it stopped
+            try:
+                kind, a, b = q.get_nowait()
+            except queue.Empty:
+                break
+            if kind == _SAMPLE:
+                writer.add(a, b)
         writer.flush()
+        _restore_signals(old)
         print("stopped, buffer flushed", flush=True)
 
 
@@ -348,7 +538,10 @@ def main(argv=None):
                         "DTR/RTS and so unpowers the sensor, making every open a cold "
                         "start that must settle before its samples mean anything")
     p.add_argument("--gap-tol", type=float, default=2.0,
-                   help="a sample this many seconds late ends the run (explicit gap)")
+                   help="samples this many seconds late, and staying late, were lost: "
+                        "the run ends (explicit gap)")
+    p.add_argument("--max-drift", type=float, default=0.5,
+                   help="re-anchor the archive's clock when it is this far (s) from UTC")
     p.add_argument("--live-file", default=None,
                    help="mirror recent raw samples to this LOCAL file for a live viewer "
                         "(default: config [acquisition].live_file)")
@@ -378,7 +571,7 @@ def main(argv=None):
         return
     run(port, archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
         live_file=live_file, live_seconds=a.live_seconds,
-        warmup=a.warmup, gap_tol=a.gap_tol,
+        warmup=a.warmup, gap_tol=a.gap_tol, max_drift=a.max_drift,
         stall_timeout=a.stall_timeout, max_reconnects=a.max_reconnects)
 
 

@@ -19,6 +19,11 @@ float32 is ~1e-6 dB of precision, far below anything the analysis resolves.
 
 A cache written before this layout (``psd_db`` inside the ``.npz``) still loads,
 fully into memory, and is converted on its next ``save_grid``/``append_grid``.
+
+Each hour's PSD is the Welch average over the hour's contiguous pieces of data
+(:mod:`waveforms`); breaks are never zero-filled.  All hours use one analysis
+rate, ``NOMINAL_FS``, so they share a frequency axis even though the recorder
+stores each segment's measured rate (they differ by ~1e-4, far below a bin).
 """
 from __future__ import annotations
 import datetime as dt
@@ -30,7 +35,9 @@ from scipy import signal
 from obspy import UTCDateTime
 from obspy.clients.filesystem.sds import Client
 
-from .config import (StationConfig, DEFAULT_STATION, PA_PER_COUNT, PASSBAND_HZ)
+from .config import (StationConfig, DEFAULT_STATION, PA_PER_COUNT, PASSBAND_HZ,
+                     NOMINAL_FS)
+from .waveforms import get_pieces
 
 SECONDS_PER_HOUR = 3600
 GRID_DTYPE = np.dtype("<f4")          # on-disk PSD rows (dB)
@@ -45,10 +52,29 @@ def _hour_range(start: dt.datetime, end: dt.datetime):
         t += SECONDS_PER_HOUR
 
 
+def welch_pieces(xs, fs: float, nperseg: int):
+    """Welch PSD over several separate runs of samples: (freqs, psd) or (None, None).
+
+    Each run is averaged on its own and the results are combined weighted by their
+    segment counts, which equals one Welch average over all the segments -- and
+    for a single run is exactly ``scipy.signal.welch``.  Runs shorter than
+    ``nperseg`` contribute nothing."""
+    step = nperseg - nperseg // 2                  # welch's default 50% overlap
+    total, nseg, f = None, 0, None
+    for x in xs:
+        if len(x) < nperseg:
+            continue
+        k = (len(x) - nperseg) // step + 1
+        f, p = signal.welch(x, fs=fs, nperseg=nperseg)
+        total = p * k if total is None else total + p * k
+        nseg += k
+    return (f, total / nseg) if nseg else (None, None)
+
+
 def compute_grid(archive, start: dt.datetime, end: dt.datetime,
                  cfg: StationConfig = DEFAULT_STATION, nperseg: int = 8192,
                  fmin: float = PASSBAND_HZ[0], fmax: float = PASSBAND_HZ[1],
-                 verbose: bool = True) -> dict:
+                 fs: float = NOMINAL_FS, verbose: bool = True) -> dict:
     """Return {'times','freqs','psd_db','seed_id',...} over [start, end) by UTC hour."""
     client = Client(str(archive))
     hours = list(_hour_range(start, end))
@@ -56,22 +82,19 @@ def compute_grid(archive, start: dt.datetime, end: dt.datetime,
     cols, times = [], []
     n_ok = 0
     for i, t in enumerate(hours):
-        st = client.get_waveforms(cfg.network, cfg.station, cfg.location,
-                                  cfg.channel, t, t + SECONDS_PER_HOUR)
+        xs = []
+        for pc in get_pieces(client, cfg, t, t + SECONDS_PER_HOUR):
+            x = pc.data.astype(np.float64) * PA_PER_COUNT        # -> Pascals
+            x -= x.mean()
+            xs.append(x)
+        f, pxx = welch_pieces(xs, fs, nperseg)
         col = None
-        if len(st):
-            st.merge(method=1, fill_value=0)
-            tr = max(st, key=lambda x: x.stats.npts)
-            if tr.stats.npts >= nperseg:
-                fs = tr.stats.sampling_rate
-                x = tr.data.astype(np.float64) * PA_PER_COUNT     # -> Pascals
-                x -= x.mean()
-                f, pxx = signal.welch(x, fs=fs, nperseg=nperseg)
-                if freqs is None:
-                    band = (f >= fmin) & (f <= fmax)
-                    freqs = f[band]; _band = band
-                col = pxx[_band]
-                n_ok += 1
+        if f is not None:
+            if freqs is None:
+                band = (f >= fmin) & (f <= fmax)
+                freqs = f[band]; _band = band
+            col = pxx[_band]
+            n_ok += 1
         times.append(t.datetime)
         cols.append(col)
         if verbose and i % 240 == 0:
@@ -117,7 +140,7 @@ def update_grid(cache, archive, cfg: StationConfig = DEFAULT_STATION,
         return load_grid(cache), 0
     try:
         ng = compute_grid(archive, new_start, end, cfg, nperseg=nperseg, verbose=verbose)
-        if len(ng["freqs"]) != len(freqs):
+        if len(ng["freqs"]) != len(freqs) or not np.allclose(ng["freqs"], freqs, rtol=1e-6):
             if verbose:
                 print("freq axis changed -> full recompute")
             build_cache(cache, archive, dt.datetime.fromisoformat(str(meta["start"])),

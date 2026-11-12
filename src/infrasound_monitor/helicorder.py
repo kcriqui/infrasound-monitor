@@ -13,6 +13,7 @@ from obspy import UTCDateTime
 from obspy.clients.filesystem.sds import Client
 
 from .config import StationConfig, DEFAULT_STATION, PA_PER_COUNT
+from .waveforms import harmonize
 
 
 def helicorder(archive, day: dt.date, out_png: str,
@@ -27,6 +28,7 @@ def helicorder(archive, day: dt.date, out_png: str,
     if to_pascals:
         for tr in st:
             tr.data = tr.data.astype("float64") * PA_PER_COUNT
+    harmonize(st)                       # per-segment measured rates -> one, for merge
     st.merge(method=1, fill_value=None)
     st.plot(type="dayplot", interval=interval_min, outfile=out_png,
             title=f"{cfg.seed_id}  {day}  (Pa)" if to_pascals else f"{cfg.seed_id}  {day}",

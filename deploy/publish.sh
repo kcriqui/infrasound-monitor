@@ -21,6 +21,13 @@ ARCHIVE="$("$VENV_PY" -c 'from infrasound_monitor.config import ARCHIVE_DIR; pri
 ts() { date -Is; }
 BUILD="$SITE_DIR.building"
 rm -rf "$BUILD"
+
+# Weather first, for the wind-matched change monitor. A failed fetch (network, the
+# archive's server) only means the comparison uses what is already stored.
+if ! "$VENV_PY" -m infrasound_monitor.weather >> "$LOG" 2>&1; then
+    echo "$(ts)  [publish] weather fetch failed -- continuing with the stored record" >> "$LOG"
+fi
+
 echo "$(ts)  [publish] rebuilding dashboard ..." >> "$LOG"
 "$VENV_PY" tools/refresh.py "$ARCHIVE" --cache "$CACHE" --out-dir "$BUILD" >> "$LOG" 2>&1
 rc=$?

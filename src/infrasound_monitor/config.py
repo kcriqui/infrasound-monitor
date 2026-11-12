@@ -56,7 +56,9 @@ _ST = _CFG.get("station", {})
 _ACQ = _CFG.get("acquisition", {})
 
 # ---- Timing (overridable in config.toml [station]) ----
-NOMINAL_FS = float(_ST.get("sample_rate", 51.4287))     # measured samples/sec for the unit
+# Starting estimate of the unit's rate, and the fixed rate the PSD analysis uses; the
+# recorder measures the real (wandering) rate and stores it per segment.
+NOMINAL_FS = float(_ST.get("sample_rate", 51.422))
 # Local wall clock = UTC + this. A single number can't track DST; night-based
 # analysis derives the quiet window from the data rather than trusting this.
 UTC_OFFSET_HOURS = float(_ST.get("utc_offset_hours", -8))
@@ -114,3 +116,14 @@ PROJECT_ROOT = str(_PROJECT_ROOT)
 SERIAL_PORT = _ACQ.get("port", "/dev/ttyUSB0")
 ARCHIVE_DIR = _resolve(_ACQ.get("archive", "archive"))
 LIVE_FILE = _resolve(_ACQ.get("live_file", "live.npz"))
+
+# ---- Weather (config.toml [weather]) -- for wind-matched analysis ----
+_WX = _CFG.get("weather", {})
+WEATHER_STATIONS = [str(s).upper() for s in _WX.get("stations", [])]   # [] = off
+# Inside the archive by default, so every backup of the archive carries it too.
+WEATHER_DIR = _resolve(_WX["dir"]) if _WX.get("dir") else str(Path(ARCHIVE_DIR) / "weather")
+
+# ---- Before/after comparison (config.toml [analysis]) ----
+_AN = _CFG.get("analysis", {})
+CHANGE_DATE = str(_AN.get("change_date", "") or "") or None   # "YYYY-MM-DD" UTC, or None
+RECENT_DAYS = int(_AN.get("recent_days", 14))      # "after" window while CHANGE_DATE is unset

@@ -3,8 +3,8 @@
 ### 🌊 [**Live dashboard → infra.tail4c32e5.ts.net**](https://infra.tail4c32e5.ts.net/)
 
 Rebuilt daily at 06:15 Pacific on the station's Raspberry Pi and served from it over
-Tailscale Funnel: spectral waterfall, long-term noise (PDF-PSD), data availability, and
-a night-only persistent-tone hunt for datacenter noise.
+Tailscale Funnel: spectral waterfall, long-term noise (PDF-PSD), data availability, a
+night-only persistent-tone hunt for datacenter noise, and a wind-matched change monitor.
 
 ---
 
@@ -96,11 +96,22 @@ infra-acquire /dev/ttyUSB0 ~/infra-archive
 ```
 
 Reads the INFRA20's serial stream (**9600 8N1, one signed integer count per
-CRLF line, ~51.4 sps** — confirmed against hardware), timestamps samples from the
-system clock, and appends gap-free, single-rate segments to the SDS day files,
-splitting automatically at UTC midnight and (re)writing `station.xml`. A genuine
-serial dropout leaves an explicit gap; a USB glitch triggers reconnect. Only one
-program can hold the port, so **close AmaSeis first** — this replaces it.
+CRLF line, ~51.4 sps** — confirmed against hardware) and appends 5-minute segments to
+the SDS day files, splitting automatically at UTC midnight and (re)writing
+`station.xml`. A genuine serial dropout leaves an explicit gap; a USB glitch triggers
+reconnect. Only one program can hold the port, so **close AmaSeis first** — this
+replaces it.
+
+**Timing.** The sensor's sample clock free-runs at about 51.42 sps and wanders by
+~1e-4 with temperature, i.e. seconds a day. A reader thread stamps every sample with
+the system clock as it arrives, so a slow disk can't delay the stamps. The writer then
+estimates when each sample was taken from the earliest arrivals, and gives each segment
+its measured rate. Consecutive segments abut exactly, so a run has no gaps however the
+clock wanders, and the archive stays within a few ms of UTC (NTP). ObsPy reads a whole
+day as one trace. The flush lines in `journalctl -u infra-acquire` show each segment's
+measured rate. Archives recorded before 2026-11 contain false 2 s breaks from the old
+fixed-rate clock (no samples are missing); the analysis reads across them rather than
+zero-filling them (`waveforms.py`).
 
 ```bash
 infra-acquire /dev/ttyUSB0 --sniff          # just print raw lines to eyeball the framing
@@ -199,6 +210,31 @@ python tools/dashboard.py ~/infra-archive \
     --start 2026-04-09 --end 2026-07-12 --cache grid.npz
 ```
 
+### Before/after: the wind-matched change monitor
+
+Wind is the largest cause of level changes at a home station, so a datacenter's
+contribution can only be judged at equal wind. `infra-weather` fetches observations from
+nearby airport stations (the [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/)
+ASOS archive, free, no key): 1-minute wind and gusts where the station has them, plus
+METARs and 5-minute reports. It stores them as CSV in `<archive>/weather/`, so archive
+backups carry them. Set the stations in `config.toml`, then backfill once; the nightly
+rebuild keeps them current.
+
+```bash
+infra-weather --start 2026-04-01          # stations from [weather] in config.toml
+python tools/compare.py                   # night hours, last 14 days vs everything before
+python tools/compare.py --change-date 2027-01-15 --hours all --png change.png
+```
+
+`tools/compare.py` learns, from the "before" hours, the level each octave band had at
+each wind speed (0.125–16 Hz bands, dB SPL), measures every "after" hour against that at
+its own wind, and reports the median change per band. The 90% interval comes from
+resampling whole nights. Rainy hours are left out. Set `[analysis] change_date` when the
+datacenter starts; until then it compares the most recent `recent_days` with the rest,
+which checks that the baseline is stable. The dashboard shows the same comparison.
+Seasonal sources still show (ocean microbaroms grow from September and lift the lowest
+bands), so read those with the calendar in mind.
+
 `tools/transients.py` is an **infrasound event explorer**: it detects transients
 (STA/LTA over a 2–15 Hz band), **characterizes** each (duration, spectral centroid,
 bandwidth, tonality, frequency drift), **classifies** them (tonal / rumble / glide /
@@ -222,7 +258,8 @@ python tools/transients.py ~/infra-archive \
 - [x] Public, auto-updating dashboard, rebuilt and served by a 1 GB Pi in flat memory
 - [x] Turnkey deploy: Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
       and a TrueNAS SCALE job that pulls the archive as a backup (`deploy/truenas/`)
-- [ ] One-command before/after comparison for when the datacenter energises
+- [x] Wind-matched before/after comparison (`tools/compare.py`, airport weather via `infra-weather`)
+- [x] Recorder clock tracks the sensor's wandering rate: no false gaps, archive time within ms of UTC
 - [ ] G-weighting (ISO 7196) for health-threshold context
 - [ ] Event attribution — correlate transients with train (GTFS) + aircraft (ADS-B) data
 - [ ] Serve the live archive over SeedLink for real-time remote views
@@ -232,13 +269,16 @@ python tools/transients.py ~/infra-archive \
 ## Layout
 
 ```
-src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-waterfall/-inventory)
+src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-waterfall/-inventory/-weather)
   config.py      reads config.toml; constants, calibration, station identity
   amaseis.py     legacy .Z reader          convert.py    .Z -> miniSEED SDS archive
   metadata.py    StationXML / response     psd.py        archive -> hourly PSD grid (+ update)
   waterfall.py   grid -> interactive HTML  helicorder.py drum/dayplot
+  waveforms.py   archive -> contiguous pieces (never zero-fills a break)
+  weather.py     airport weather (IEM ASOS) -> <archive>/weather/*.csv -> hourly
   acquire.py     live serial acquisition daemon (config-driven; --sniff/--list/--live-file)
 tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dashboard.py ·
+                 compare.py (wind-matched before/after) ·
                  transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py ·
                  tft_status.py (Raspberry Pi Mini PiTFT status display) ·
                  statusd.py (lightweight live-status web page) ·

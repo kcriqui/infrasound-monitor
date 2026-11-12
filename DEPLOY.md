@@ -71,8 +71,11 @@ the port.
 .venv/bin/python -m infrasound_monitor.acquire /dev/ttyUSB0 --sniff # watch raw lines
 ```
 
-You should see one signed integer per line (e.g. `-00123`) at ~51 lines/second — put
-that measured rate in `config.toml` as `sample_rate`. Data lands as standard
+You should see one signed integer per line (e.g. `-00123`) at ~51 lines/second. The
+recorder measures the exact rate itself and logs it in every `flushed` line; after a
+day, copy a typical value into `config.toml` as `sample_rate` before the first
+dashboard build (it is also the analysis rate, and changing it later recomputes the
+PSD grid). Data lands as standard
 **miniSEED** in `archive/` (SDS layout) with a `station.xml`, so it works in ObsPy,
 Swarm, and the FDSN toolchain.
 
@@ -163,8 +166,11 @@ Then `bash deploy/setup.sh --backup /mnt/usb/infra-backup` (or, if already insta
 
 ### Serving the dashboard
 
-The `--dashboard` timer runs `deploy/publish.sh` at 06:15. It extends the PSD grid and
-rebuilds `site/index.html` and `site/waterfall_full.html`. It builds them in a scratch
+The `--dashboard` timer runs `deploy/publish.sh` at 06:15. It fetches the latest airport
+weather (if `[weather] stations` is set in `config.toml`; a failed fetch only skips
+the update), extends the PSD grid and rebuilds `site/index.html` and
+`site/waterfall_full.html`. To give the change monitor its history, backfill the
+weather once: `.venv/bin/infra-weather --start <first archive day>`. It builds them in a scratch
 directory and moves the finished pages into place, so a visitor never gets a
 half-written page and a failed rebuild leaves the previous day's pages up.
 

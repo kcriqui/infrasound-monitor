@@ -39,6 +39,7 @@ from obspy.clients.filesystem.sds import Client
 from obspy.signal import PPSD
 
 from infrasound_monitor.config import DEFAULT_STATION, P_REF_PA
+from infrasound_monitor.waveforms import harmonize
 
 
 def _parse_date(s: str) -> dt.datetime:
@@ -77,6 +78,7 @@ def build_ppsd(cli: Client, inv, seed, start, end, out_dir: Path,
         st = cli.get_waveforms(net, sta, loc, cha, t, t + 86400)
         if not st:
             continue
+        harmonize(st)          # PPSD skips traces whose rate differs from its first
         days += 1
         if ppsd is None:
             ppsd = PPSD(st[0].stats, metadata=inv, ppsd_length=ppsd_length,
@@ -210,6 +212,7 @@ def calibrated_dayplot(cli: Client, inv, seed, day: dt.datetime, out_dir: Path):
     if not st:
         print(f"  dayplot {day:%Y-%m-%d}: no data")
         return
+    harmonize(st)
     st.merge(method=0)
     st.remove_sensitivity(inv)                  # counts -> Pa
 

@@ -34,6 +34,7 @@ infra-convert = "infrasound_monitor.convert:main"
 infra-acquire = "infrasound_monitor.acquire:main"
 infra-waterfall = "infrasound_monitor.waterfall:main"
 infra-inventory = "infrasound_monitor.metadata:main"
+infra-weather = "infrasound_monitor.weather:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

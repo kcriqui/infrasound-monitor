@@ -30,6 +30,8 @@ sample_rate = 51.422
 # US Eastern Standard = -5, UTC = 0). Used only for labels; a single value can't
 # track daylight saving, so night-based analysis derives the quiet hours from data.
 utc_offset_hours = -8
+# IANA timezone for local-time schedules in the tone tracker (follows daylight saving).
+# timezone = "America/Los_Angeles"
 
 [acquisition]
 port      = "/dev/ttyUSB0"  # serial port (or /dev/ttyS0); list with: infra-acquire --list
@@ -43,6 +45,21 @@ live_file = "live.npz" # rolling buffer for the live viewer (relative or absolut
 # fetches them (free, no key). Empty = no weather, no change monitor.
 stations = []
 # dir = "archive/weather"   # default: <archive>/weather, so archive backups include it
+
+# Narrowband sources already explained at your site, one block each. The tone tracker
+# labels them, and doesn't flag them unless one turns steady (present around the clock)
+# when it wasn't before: a new source can hide at a known frequency. allow_steady = true
+# turns that check off, for sources that are naturally steady at times.
+[[tones.known]]
+name = "Ocean microbaroms"   # ~2x ocean swell frequency; strong in winter storms
+f_lo = 0.12
+f_hi = 0.35
+allow_steady = true
+
+# [[tones.known]]
+# name = "Neighbour's heat pump"
+# f_lo = 7.0
+# f_hi = 7.3
 
 [analysis]
 # When the source you're watching started (e.g. a datacenter energised), "YYYY-MM-DD"

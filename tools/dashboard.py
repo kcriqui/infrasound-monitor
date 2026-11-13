@@ -25,6 +25,7 @@ import matplotlib.dates as mdates
 import report          # sibling tool (tools/ is on sys.path when run as a script)
 import tonehunt        # sibling tool
 import compare         # sibling tool
+import tonetrack       # sibling tool
 from infrasound_monitor.config import (StationConfig, DEFAULT_STATION, UTC_OFFSET_HOURS,
                                         WEATHER_STATIONS, CHANGE_DATE)
 from infrasound_monitor.psd import build_cache, load_grid, have_mask
@@ -113,10 +114,7 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
     loc = [int((h + utc_offset) % 24) for h in night_hours]
     night_label = (f"{night_hours[0]:02d}:00–{(night_hours[-1]+1)%24:02d}:00 UTC "
                    f"· ~{min(loc):02d}:00–{(max(loc)+1)%24:02d}:00 local")
-    peak_pct = float(pn.max() * 100) if pn.size else 0.0
-    diff = pn - pd_
-    top = sorted(np.argsort(diff)[::-1][:6], key=lambda k: freqs[k])
-    tone_rows = [(float(freqs[i]), float(pn[i] * 100), float(pd_[i] * 100)) for i in top]
+    tones = _tone_tracker(grid)
 
     av = report.availability(times, have)
     pdf = report.pdf_psd(freqs, psd, have)
@@ -127,20 +125,41 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
                 night=_fig_nightly(day_dt, freqs, night_wf, night_label),
                 pdf=pdf["img"], avail=av["img"])
     kpis = dict(uptime=av["uptime"], ngaps=av["ngaps"], nights=len(day_dt),
-                span_days=(end - start).days, peak_pct=peak_pct,
+                span_days=(end - start).days, tones=tones,
                 night_label=night_label,
                 overall=next((b for b in bands if b["band"].startswith("0.05–20")), None))
     change_html = _change_section(grid, night_label)
-    html = _render(cfg, start, end, meta, kpis, tone_rows, bands, imgs, thr,
+    html = _render(cfg, start, end, meta, kpis, bands, imgs,
                    has_interactive=(Path(out_html).parent / "waterfall_full.html").exists(),
                    change_html=change_html)
     Path(out_html).parent.mkdir(parents=True, exist_ok=True)
     Path(out_html).write_text(html, encoding="utf-8")
     print(f"wrote {out_html}")
     print(f"  uptime {kpis['uptime']:.1f}%  nights {kpis['nights']}  "
-          f"tone peak {peak_pct:.0f}% -> "
-          f"{'tone-free' if peak_pct < 50 else 'possible tone'}")
+          f"tones: {tones['verdict'] if tones else 'tracker skipped'}")
     return out_html
+
+
+def _tone_tracker(grid):
+    """Tone-tracker results plus its figure and table, or None (never fails the page)."""
+    try:
+        res = tonetrack.analyse(grid, dt.datetime.fromisoformat(CHANGE_DATE) if CHANGE_DATE else None)
+    except Exception as e:
+        print(f"  tone tracker skipped: {e}")
+        return None
+    res["img"] = report._fig_b64(tonetrack.figure(res))
+    rows = []
+    for s in res["sources"][:10]:
+        label = s["known"] or (f"harmonic, {s['harmonic_of']}" if s["harmonic_of"] else "")
+        if s in res["flag"]:
+            label = "<strong>unexplained, steady</strong>" + (f" ({label})" if label else "")
+        rows.append(f'<tr><td class="num">{s["f"]:.2f}</td>'
+                    f'<td class="num">{s["f_lo"]:.2f}–{s["f_hi"]:.2f}</td>'
+                    f'<td class="num">{s["occ_base"]*100:.0f}%</td>'
+                    f'<td class="num">{s["occ_recent"]*100:.0f}%</td>'
+                    f'<td>{tonetrack.schedule(s)}</td><td>{label}</td></tr>')
+    res["table"] = "".join(rows)
+    return res
 
 
 def _change_section(grid, night_label):
@@ -214,12 +233,17 @@ def _tile(label, value, sub="", state=""):
             f'<div class="tile-val">{value}</div>{sub}</div>')
 
 
-def _render(cfg, start, end, meta, k, tone_rows, bands, imgs, thr, has_interactive,
-            change_html=""):
+def _render(cfg, start, end, meta, k, bands, imgs, has_interactive, change_html=""):
     now = dt.datetime.now()
-    tone_free = k["peak_pct"] < 50
-    verdict_state = "ok" if tone_free else "warn"
-    verdict_word = "No steady tone" if tone_free else "Possible tone"
+    tones = k["tones"]
+    if tones is None:
+        verdict_state, verdict_word, verdict_sub = "", "—", "tracker unavailable"
+    elif tones["flag"]:
+        verdict_state, verdict_word = "warn", "Unexplained tone"
+        verdict_sub = ", ".join(f"{s['f']:.2f} Hz" for s in tones["flag"])
+    else:
+        verdict_state, verdict_word = "ok", "None unexplained"
+        verdict_sub = f"{len(tones['sources'])} tracked sources"
     loc = (f'{meta.get("lat"):.4f}, {meta.get("lon"):.4f}'
            if meta.get("lat") is not None else "—")
     ov = k["overall"]
@@ -228,8 +252,7 @@ def _render(cfg, start, end, meta, k, tone_rows, bands, imgs, thr, has_interacti
     tiles = "".join([
         _tile("Data uptime", f'{k["uptime"]:.1f}<span class="unit">%</span>',
               f'{k["ngaps"]} gaps', "ok" if k["uptime"] >= 85 else "warn"),
-        _tile("Datacenter tone", verdict_word,
-              f'peak {k["peak_pct"]:.0f}% of nights', verdict_state),
+        _tile("Steady tone", verdict_word, verdict_sub, verdict_state),
         _tile("Ambient level", noise_spl.split()[0] + '<span class="unit"> dB SPL</span>',
               "median, 0.05–20 Hz"),
         _tile("Coverage", f'{k["span_days"]}<span class="unit"> days</span>',
@@ -238,10 +261,22 @@ def _render(cfg, start, end, meta, k, tone_rows, bands, imgs, thr, has_interacti
               "auto-detected (highest-SNR)"),
     ])
 
-    tone_tbl = "".join(
-        f'<tr><td>{f:.2f} Hz</td><td class="num">{n:.0f}%</td>'
-        f'<td class="num">{d:.0f}%</td><td class="num">{n-d:+.0f}</td></tr>'
-        for f, n, d in tone_rows)
+    if tones is not None:
+        recent_txt = (f"since {tones['split']:%Y-%m-%d}" if CHANGE_DATE
+                      else f"last {(now - tones['split']).days + 1} days")
+        tracker_html = f"""<h2 style="margin-top:28px">Tracked tones
+    <span class="pill {verdict_state}">{verdict_word}</span></h2>
+    <p class="cap">Every hour's narrowband peaks, linked hour to hour into tracks that follow a
+    tone as its frequency drifts, then grouped into sources. A datacenter would show as an
+    <em>unexplained steady</em> source: present in most hours, around the clock, in the recent
+    window ({recent_txt}). Known local sources and harmonics are labelled; a known one is
+    flagged again if it turns steady.</p>
+    <div class="figure"><img alt="tracked tones" src="{tones['img']}"></div>
+    <table class="below" style="max-width:none"><thead><tr><th class="num">Hz</th>
+    <th class="num">Range</th><th class="num">Baseline</th><th class="num">Recent</th>
+    <th>Schedule (local)</th><th>Label</th></tr></thead><tbody>{tones['table']}</tbody></table>"""
+    else:
+        tracker_html = ""
     band_tbl = "".join(
         f'<tr><td>{b["band"]}</td><td class="num">{b["med_db"]:.1f}</td>'
         f'<td class="num">{b["rms_pa"]:.4f}</td><td class="num">{b["spl"]:.1f}</td></tr>'
@@ -352,19 +387,12 @@ a:focus-visible, .link:focus-visible {{ outline:2px solid var(--accent); outline
 
   <section>
     <p class="eyebrow">Primary detection · night-only</p>
-    <h2>Persistent-tone hunt <span class="pill {'ok' if k['peak_pct']<50 else 'warn'}">{verdict_word}</span></h2>
+    <h2>Persistent-tone hunt</h2>
     <p class="cap">Each night's spectrum with its broadband level removed, so only
     narrowband prominence remains. A datacenter tone would appear as a steady bright
-    <em>horizontal</em> line climbing toward 100% of nights at a fixed frequency.
-    Quiet window {k['night_label']}.</p>
+    <em>horizontal</em> line at a fixed frequency. Quiet window {k['night_label']}.</p>
     <div class="figure"><img alt="night-only tone-hunt waterfall" src="{imgs['night']}"></div>
-    <div class="grid2" style="margin-top:16px">
-      <p class="cap">Frequencies more persistent at night than day are the datacenter-like
-      signature. Currently the strongest are weak and consistent with local equipment,
-      not a steady source — the baseline reads <strong>tone-free</strong>.</p>
-      <table><thead><tr><th>Freq</th><th class="num">Night</th><th class="num">Day</th>
-      <th class="num">Δ pts</th></tr></thead><tbody>{tone_tbl}</tbody></table>
-    </div>
+    {tracker_html}
   </section>
 
   {change_html}

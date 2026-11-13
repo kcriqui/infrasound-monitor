@@ -123,6 +123,19 @@ WEATHER_STATIONS = [str(s).upper() for s in _WX.get("stations", [])]   # [] = of
 # Inside the archive by default, so every backup of the archive carries it too.
 WEATHER_DIR = _resolve(_WX["dir"]) if _WX.get("dir") else str(Path(ARCHIVE_DIR) / "weather")
 
+# Station timezone for local-time schedules (IANA name; DST-aware).  Falls back to the
+# fixed utc_offset_hours when unset or unknown.
+TIMEZONE = str(_ST.get("timezone", "") or "") or None
+
+# ---- Tone tracker (config.toml [[tones.known]]) ----
+# Narrowband sources already identified at this site, so the tracker labels them:
+# [(name, f_lo, f_hi, allow_steady), ...], Hz.  A known source is still flagged if it
+# turns steady when it wasn't, unless allow_steady (e.g. natural microbaroms).
+KNOWN_TONES = [(str(k.get("name", "known source")), float(k["f_lo"]), float(k["f_hi"]),
+                bool(k.get("allow_steady", False)))
+               for k in _CFG.get("tones", {}).get("known", [])
+               if "f_lo" in k and "f_hi" in k]
+
 # ---- Before/after comparison (config.toml [analysis]) ----
 _AN = _CFG.get("analysis", {})
 CHANGE_DATE = str(_AN.get("change_date", "") or "") or None   # "YYYY-MM-DD" UTC, or None

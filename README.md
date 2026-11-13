@@ -188,6 +188,21 @@ python tools/tonehunt.py ~/infra-archive --start ... --end ... \
     --cache grid.npz --night
 ```
 
+**Tone tracker.** Scoring each frequency bin on its own undercounts a real machine tone,
+which wanders a few hundredths of a Hz and so spreads over neighbouring bins.
+`tools/tonetrack.py` instead finds every hour's narrowband peaks, links them hour to hour
+into tracks that follow a tone as it drifts, and groups the tracks into **sources**. Each
+source gets its frequency range, how often it's present (baseline vs the recent window),
+its local hour-of-day and weekday schedule, and its harmonics. Sources listed under
+`[[tones.known]]` in `config.toml` are labelled. The verdict flags an **unexplained steady**
+source: present in most recent hours, around the clock, and neither known nor a harmonic. A
+known source that *turns* steady is flagged too, since a new machine can sit at a known
+frequency. It runs on the grid in about a minute on a Pi 3B+, and the dashboard shows it.
+
+```bash
+python tools/tonetrack.py --png tones.png --csv sources.csv
+```
+
 For a one-page **station quality + noise report** (an ISPAQ/MUSTANG-style summary —
 ISPAQ itself is Linux/R-only), `tools/report.py` emits a self-contained HTML with
 station metadata, data availability/uptime and gaps, the **PDF-PSD** (probability
@@ -258,6 +273,7 @@ python tools/transients.py ~/infra-archive \
 - [x] Public, auto-updating dashboard, rebuilt and served by a 1 GB Pi in flat memory
 - [x] Turnkey deploy: Raspberry Pi/systemd (`DEPLOY.md`, `deploy/`, `tools/doctor.py`),
       and a TrueNAS SCALE job that pulls the archive as a backup (`deploy/truenas/`)
+- [x] Tone tracker: drifting tones followed hour to hour, grouped into scheduled/steady sources
 - [x] Wind-matched before/after comparison (`tools/compare.py`, airport weather via `infra-weather`)
 - [x] Recorder clock tracks the sensor's wandering rate: no false gaps, archive time within ms of UTC
 - [ ] G-weighting (ISO 7196) for health-threshold context
@@ -278,7 +294,7 @@ src/infrasound_monitor/   package (console scripts: infra-convert/-acquire/-wate
   weather.py     airport weather (IEM ASOS) -> <archive>/weather/*.csv -> hourly
   acquire.py     live serial acquisition daemon (config-driven; --sniff/--list/--live-file)
 tools/           analyze.py (PPSD) · tonehunt.py (--night) · report.py · dashboard.py ·
-                 compare.py (wind-matched before/after) ·
+                 compare.py (wind-matched before/after) · tonetrack.py (tone tracker) ·
                  transients.py (event explorer) · live.py (live drum) · refresh.py · doctor.py ·
                  tft_status.py (Raspberry Pi Mini PiTFT status display) ·
                  statusd.py (lightweight live-status web page) ·

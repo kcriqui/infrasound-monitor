@@ -29,9 +29,16 @@ class _SilentPort:
     opened = []
 
     def __init__(self, *a, **k):
+        self.history = []                      # every DTR/RTS assignment, in order
         self.dtr = self.rts = False
+        self.history.clear()
         self.kwargs = k
         _SilentPort.opened.append(self)
+
+    def __setattr__(self, name, value):
+        if name in ("dtr", "rts") and "history" in self.__dict__:
+            self.history.append((name, value))
+        object.__setattr__(self, name, value)
 
     def __enter__(self):
         return self
@@ -43,18 +50,67 @@ class _SilentPort:
         return b""
 
 
+@pytest.fixture(autouse=True)
+def _no_power_off_wait(monkeypatch):
+    import infrasound_monitor.acquire as acq
+    monkeypatch.setattr(acq, "POWER_OFF_S", 0.0)
+
+
 def test_dtr_and_rts_are_asserted_because_they_power_the_sensor(tmp_path, monkeypatch):
     """The INFRA20 is powered parasitically off the handshake lines, so leaving
-    these to pyserial's default would make the sensor's power supply implicit."""
+    these to pyserial's default would make the sensor's power supply implicit.
+    A stall then cuts that power on purpose, so the restart is a cold start."""
     _SilentPort.opened.clear()
     _install_fake_serial(monkeypatch, _SilentPort)
-    with pytest.raises(AcquisitionStalled):
+    with pytest.raises(AcquisitionStalled, match="power cut"):
         run("/dev/fake", tmp_path, warmup=0, stall_timeout=0.3, live_file=None)
     port = _SilentPort.opened[0]
-    assert port.dtr is True and port.rts is True
+    assert port.history[:2] == [("dtr", True), ("rts", True)]     # powered first
+    assert port.dtr is False and port.rts is False                 # then cut on stall
     # hardware flow control would let the driver toggle those same lines
     assert port.kwargs.get("rtscts") is False
     assert port.kwargs.get("dsrdtr") is False
+
+
+def test_closing_the_port_leaves_the_sensor_powered():
+    """HUPCL off: a restart must not power-cycle the sensor (its clock comes back
+    at a different rate).  Checked on a real pty."""
+    import os
+    import termios
+    from infrasound_monitor.acquire import _keep_power_on_close
+    if not hasattr(os, "openpty"):
+        pytest.skip("needs a pty")
+    master, slave = os.openpty()
+    try:
+        attrs = termios.tcgetattr(slave)
+        attrs[2] |= termios.HUPCL
+        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+
+        class _Port:
+            def fileno(self):
+                return slave
+        assert _keep_power_on_close(_Port()) is True
+        assert not termios.tcgetattr(slave)[2] & termios.HUPCL
+    finally:
+        os.close(master); os.close(slave)
+
+
+def test_main_exits_without_interpreter_teardown(tmp_path, monkeypatch):
+    """main() must leave via os._exit once run() returns: the teardown is where a
+    stop hung for ~30 s.  Non-zero when run() raised, so systemd restarts it."""
+    import infrasound_monitor.acquire as acq
+    codes = []
+    monkeypatch.setattr(acq.os, "_exit", lambda c: codes.append(c))
+    monkeypatch.setattr(acq, "run", lambda *a, **k: None)
+    acq.main(["/dev/fake", str(tmp_path)])
+    assert codes == [0]
+
+    def boom(*a, **k):
+        raise AcquisitionStalled("x")
+    monkeypatch.setattr(acq, "run", boom)
+    codes.clear()
+    acq.main(["/dev/fake", str(tmp_path)])
+    assert codes[0] == 1
 
 
 class _UnopenablePort:

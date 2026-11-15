@@ -29,6 +29,14 @@ Only one program can hold the serial port.  A future step can additionally serve
 the archive over SeedLink for live views.
 """
 from __future__ import annotations
+import os
+
+# The daemon does no heavy maths, so keep numpy's BLAS single-threaded.  Its idle
+# worker pool is what the process waits on at exit, and a stop has been seen to
+# hang there for ~30 s, until systemd killed it.  Must run before numpy loads.
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import datetime as dt
 import math
@@ -344,9 +352,14 @@ def _reader(port, baud, warmup, reconnect_delay, stall_timeout, max_reconnects, 
                             # readline timed out, or the line was garbage. Neither
                             # raises, so this is where a dead sensor hides.
                             if stall_timeout and now - last_sample > stall_timeout:
+                                # The port keeps the sensor powered across a close
+                                # (HUPCL off), so cut power here: the restart must
+                                # be a cold start to clear a wedged sensor.
+                                _power_cycle(ser)
                                 raise AcquisitionStalled(
                                     f"no valid sample for {stall_timeout:.0f}s on {port} "
-                                    f"(port is open, so the sensor or cable is the suspect)")
+                                    f"(port is open, so the sensor or cable is the suspect); "
+                                    f"sensor power cut for {POWER_OFF_S:.0f}s")
                             continue
                         last_sample = now
                         out.put((_SAMPLE, c, now))
@@ -479,6 +492,13 @@ def _assert_power_lines(ser):
 
     Also why ``rtscts``/``dsrdtr`` are off at open: hardware flow control would
     hand these lines to the driver to toggle, i.e. cut power mid-stream.
+
+    And why HUPCL is cleared: by default Linux drops DTR/RTS when the port closes,
+    so every restart of this daemon (a deploy, a reboot of the service)
+    power-cycled the sensor.  Its sample clock is a free-running oscillator that
+    came back at a different rate: 51.42 sps before a restart on 2026-11-15, a
+    steady 51.39 after.  With HUPCL off the sensor stays powered between runs;
+    :func:`_power_cycle` cuts power on purpose when a stall needs a cold start.
     """
     for attr in ("dtr", "rts"):
         try:
@@ -486,17 +506,44 @@ def _assert_power_lines(ser):
         except (OSError, ValueError) as e:        # some adapters expose neither
             print(f"warning: could not assert {attr.upper()} ({e}); if the sensor "
                   f"is powered from that line it will stay silent", flush=True)
+    _keep_power_on_close(ser)
+
+
+def _keep_power_on_close(ser) -> bool:
+    """Clear the port's HUPCL flag so closing it leaves DTR/RTS (the power) up."""
+    try:
+        import termios
+        fd = ser.fileno()
+        attrs = termios.tcgetattr(fd)
+        if attrs[2] & termios.HUPCL:
+            attrs[2] &= ~termios.HUPCL
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        return True
+    except Exception:                    # not a tty (tests, other platforms): no-op
+        return False
+
+
+POWER_OFF_S = 3.0        # how long a deliberate power cut lasts
+
+
+def _power_cycle(ser):
+    """Drop DTR/RTS (the sensor's power) for POWER_OFF_S; the next open restores it."""
+    try:
+        ser.dtr = ser.rts = False
+    except (OSError, ValueError):
+        return
+    time.sleep(POWER_OFF_S)
 
 
 def _discard_warmup(ser, seconds: float):
     """Read and drop the connect transient (garbage line + filter settling).
 
-    Every open is a *cold* start: closing the port drops DTR/RTS, which removes
-    power from the sensor, so a reconnect power-cycles it rather than merely
-    reattaching.  The INFRA20's 0.05 Hz high-pass corner implies a time constant
-    of ~3.2 s, so allow ~5 of those to settle before trusting samples -- else the
-    first data after an automatic restart is a decaying transient rather than an
-    honest gap.
+    The sensor stays powered across ordinary restarts (see
+    :func:`_assert_power_lines`), but the first open after boot, a stall's
+    deliberate power cut, or a replugged adapter is a *cold* start.  The INFRA20's
+    0.05 Hz high-pass corner implies a time constant of ~3.2 s, so allow ~5 of
+    those to settle before trusting samples -- else the first data after a cold
+    start is a decaying transient rather than an honest gap.
     """
     if seconds <= 0:
         return
@@ -529,9 +576,9 @@ def main(argv=None):
     p.add_argument("--flush-seconds", type=float, default=300.0,
                    help="append a segment to the day file at least this often")
     p.add_argument("--warmup", type=float, default=15.0,
-                   help="seconds of post-open data to discard; closing the port drops "
-                        "DTR/RTS and so unpowers the sensor, making every open a cold "
-                        "start that must settle before its samples mean anything")
+                   help="seconds of post-open data to discard: after a cold start "
+                        "(boot, replug, a stall's power cut) the sensor must settle "
+                        "before its samples mean anything")
     p.add_argument("--gap-tol", type=float, default=2.0,
                    help="samples this many seconds late, and staying late, were lost: "
                         "the run ends (explicit gap)")
@@ -564,10 +611,25 @@ def main(argv=None):
     if a.sniff:
         sniff(port, a.baud)
         return
-    run(port, archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
-        live_file=live_file, live_seconds=a.live_seconds,
-        warmup=a.warmup, gap_tol=a.gap_tol, max_drift=a.max_drift,
-        stall_timeout=a.stall_timeout, max_reconnects=a.max_reconnects)
+    try:
+        run(port, archive, baud=a.baud, fs=a.fs, flush_seconds=a.flush_seconds,
+            live_file=live_file, live_seconds=a.live_seconds,
+            warmup=a.warmup, gap_tol=a.gap_tol, max_drift=a.max_drift,
+            stall_timeout=a.stall_timeout, max_reconnects=a.max_reconnects)
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        _exit_now(1)                    # non-zero: systemd's Restart=always acts
+    _exit_now(0)
+
+
+def _exit_now(code: int):
+    """Leave without Python's interpreter teardown.  By now every sample is on disk
+    and every file closed; the teardown (joining library thread pools, freeing
+    modules) is what a stop sat in for ~30 s until systemd killed the daemon."""
+    import sys
+    sys.stdout.flush(); sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":

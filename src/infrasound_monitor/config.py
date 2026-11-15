@@ -56,8 +56,8 @@ _ST = _CFG.get("station", {})
 _ACQ = _CFG.get("acquisition", {})
 
 # ---- Timing (overridable in config.toml [station]) ----
-# Starting estimate of the unit's rate, and the fixed rate the PSD analysis uses; the
-# recorder measures the real (wandering) rate and stores it per segment.
+# The unit's long-run mean rate: written to every archive segment and used by the PSD
+# analysis.  The sensor's real rate wanders around it (see acquire.SdsWriter).
 NOMINAL_FS = float(_ST.get("sample_rate", 51.422))
 # Local wall clock = UTC + this. A single number can't track DST; night-based
 # analysis derives the quiet window from the data rather than trusting this.

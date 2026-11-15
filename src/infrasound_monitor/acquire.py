@@ -15,10 +15,10 @@ What this daemon does
 * A reader thread does nothing but read the port and stamp each sample with the
   **system clock as it arrives**.  Writing happens on the main thread, so a slow
   disk delays the write, not the timestamps.
-* The sensor's sample clock free-runs: about 51.42 sps, wandering by ~1e-4 with
-  temperature.  :class:`SdsWriter` measures it continuously and gives every
-  flushed segment its measured rate, so segments abut exactly, timestamps follow
-  the (NTP-disciplined) system clock to a few ms, and the samples stay raw.
+* The sensor's sample clock free-runs: about 51.42 sps on average, wandering by
+  ~3e-4 within hours.  :class:`SdsWriter` estimates when each sample was taken,
+  writes one fixed rate throughout, and corrects the archive's clock in a small
+  step whenever it is ``max_drift`` off UTC.  The samples stay raw.
 * A genuine serial dropout -- samples lost, not merely delivered late -- ends the
   run and starts a new one, leaving an explicit gap.
 * Appends completed segments to the SeisComP Data Structure (SDS) day file for
@@ -66,8 +66,7 @@ def parse_line(line: bytes):
 LATENCY_BLOCK = 256      # samples (~5 s) per earliest-arrival block of the clock estimate
 CONFIRM_S = 2.5          # a late stream that flows normally this long, still late, lost data
 MAX_PENDING = 6000       # samples held while deciding (~2 min; the tty buffer holds ~10 s)
-MIN_MEASURE_S = 60.0     # segments shorter than this keep the previous rate
-RATE_BAND = 4e-5         # a day's segment rates stay within this (relative) of its reference
+MIN_MEASURE_S = 60.0     # segments shorter than this don't update the measured rate
 RATE_LIMIT = 5e-3        # a "measured" rate further than this from nominal is nonsense
 
 
@@ -81,26 +80,30 @@ class SdsWriter:
     Samples are grouped into *runs* of contiguous data, and a run into segments of
     ``flush_seconds``, each appended to its UTC day file as it completes.
 
-    Timing.  The INFRA20's sample clock free-runs, and the true rate wanders by
-    ~1e-4 with temperature.  Stamping sample i as ``anchor + i / nominal`` (what
-    this class used to do) drifts by seconds a day, and the old cure, starting a
-    new run whenever the drift reached ``gap_tol``, put a fake 2 s gap in the
-    archive every few hours without losing a sample.
+    Timing.  The INFRA20's sample clock free-runs.  Measured against the Pi's
+    NTP clock (within ~4 ms of UTC), it averages ~51.423 sps and wanders by ~3e-4
+    within hours, so a fixed-rate clock model drifts by seconds a day.  There is
+    no way to keep both a single sample rate and exact time without resampling
+    the data, so this writer keeps the rate and bounds the time error:
 
-    Instead each segment carries its *measured* rate and starts exactly where the
-    previous one ended, so a run is gap-free however the clock wanders:
-
+    * Every segment is written at the one configured rate, so all traces share
+      it and ObsPy's ``Stream.merge`` works on any stretch of the archive.
     * The time a sample was taken is estimated from arrival times.  Arrivals are
       only ever delayed (USB latency, scheduling), never early, so the earliest
       arrival relative to the clock model over a ~5 s block marks the model's
-      true offset.  That puts each segment's end within a few ms of UTC.
-    * rate = samples / (estimated end - start).  Rates are held within
-      ``RATE_BAND`` of the UTC day's reference rate, because ObsPy joins abutting
-      records into one trace only while their rates agree to ~1e-4; the band is
-      re-centred on the measured rate at each midnight.  If the clock leaves the
-      band for long enough that the archive's time is off by ``max_drift``, the
-      writer re-anchors on the measured time: a logged timing correction of that
-      size, the only discontinuity a run can contain.
+      true offset, to a few ms.
+    * Segments abut exactly until the archive's clock is ``max_drift`` off that
+      estimate.  Then the next segment starts at the estimated true time: a
+      logged timing correction, a step of under ``max_drift`` (about 8 a day at
+      1 s).  ``waveforms.pieces`` reads across these steps; ``merge`` fills or
+      trims the few samples involved.
+    * The flush log reports the sensor's measured rate.  Set ``sample_rate`` in
+      config.toml to its long-run mean to keep corrections rare.
+
+    The previous scheme, which started a new run whenever the drift reached
+    ``gap_tol``, left a false 2 s gap every few hours.  An interim scheme gave each
+    segment its own measured rate; the wander made ObsPy split traces at mixed
+    rates, which ``merge`` refuses.
 
     A real dropout (samples lost, not just late) ends the run.  Samples arriving
     more than ``gap_tol`` late are held: if the stream catches up (a burst of
@@ -111,14 +114,13 @@ class SdsWriter:
 
     def __init__(self, archive, cfg: StationConfig = DEFAULT_STATION,
                  fs: float = NOMINAL_FS, flush_seconds: float = 300.0,
-                 gap_tol: float = 2.0, max_drift: float = 0.5,
+                 gap_tol: float = 2.0, max_drift: float = 1.0,
                  encoding: str = "STEIM2", verbose: bool = True):
         self.archive = Path(archive)
         self.cfg = cfg
         self.fs_nominal = float(fs)
-        self.fs_ref = float(fs)        # the current UTC day's reference rate
-        self.fs = float(fs)            # rate of the current segment's clock model
-        self.fs_true = float(fs)       # latest measured sensor rate
+        self.fs = float(fs)            # the one rate every segment is written at
+        self.fs_true = float(fs)       # latest measured sensor rate (for the log)
         self.flush_seconds = flush_seconds
         self.gap_tol = gap_tol
         self.max_drift = max_drift
@@ -192,7 +194,7 @@ class SdsWriter:
         k = len(self.buf)
         # Split at UTC midnight so a segment never straddles two day files.
         if k and _utc_day(self._model(k)) != _utc_day(self._model(0)):
-            self._close_segment(new_day=True)
+            self._close_segment()
             k = 0
         o = t - self._model(k)
         self.buf.append(int(count))
@@ -208,7 +210,7 @@ class SdsWriter:
             self._close_segment()
 
     # -- output -------------------------------------------------------------
-    def _close_segment(self, new_day: bool = False):
+    def _close_segment(self):
         n = len(self.buf)
         if not n:
             return
@@ -218,24 +220,17 @@ class SdsWriter:
             start = self.seg_start + (0.0 if self._first_min == math.inf else self._first_min)
             self.true_start = start
         t_meas = self._model(n) + self._offset()     # when sample n would have been taken
-        fs = self.fs
         if t_meas - self.true_start >= MIN_MEASURE_S:
             fs_true = n / (t_meas - self.true_start)
-            fs_fix = n / (t_meas - start)           # the rate that lands this segment on time
             if abs(fs_true / self.fs_nominal - 1) <= RATE_LIMIT:
                 self.fs_true = fs_true
-                fs = min(max(fs_fix, self.fs_ref * (1 - RATE_BAND)), self.fs_ref * (1 + RATE_BAND))
-        end = start + n / fs
-        self._write(start, fs)
-        self.fs = fs
+        end = start + n / self.fs
+        self._write(start, self.fs)
         drift = t_meas - end
         if abs(drift) > self.max_drift:
-            print(f"timing correction: the sensor clock ({self.fs_true:.4f} sps) left the rate "
-                  f"band around {self.fs_ref:.4f}; re-anchoring by {drift:+.3f} s", flush=True)
-            self.fs_ref = self.fs = self.fs_true
+            print(f"timing correction: archive clock {drift:+.3f} s off UTC "
+                  f"(sensor running at {self.fs_true:.4f} sps)", flush=True)
             end = t_meas
-        if new_day:
-            self.fs_ref = self.fs = self.fs_true
         self.seg_start, self.seg_exact, self.true_start = end, True, t_meas
         self.buf = []
         self._reset_minima()
@@ -253,7 +248,7 @@ class SdsWriter:
             Stream([tr]).write(fh, format="MSEED", encoding=self.encoding, reclen=512)
         if self.verbose:
             print(f"flushed {tr.stats.npts} samples @ {st_utc.isoformat()} "
-                  f"({fs:.5f} sps) -> {out.name}", flush=True)
+                  f"(sensor {self.fs_true:.4f} sps) -> {out.name}", flush=True)
 
     def flush(self):
         """Write out everything buffered; the run continues seamlessly afterwards."""
@@ -396,7 +391,7 @@ def _restore_signals(old):
 
 def run(port: str, archive, cfg: StationConfig = DEFAULT_STATION, baud: int = 9600,
         fs: float = NOMINAL_FS, flush_seconds: float = 300.0, warmup: float = 15.0,
-        gap_tol: float = 2.0, max_drift: float = 0.5, reconnect_delay: float = 5.0,
+        gap_tol: float = 2.0, max_drift: float = 1.0, reconnect_delay: float = 5.0,
         live_file=None, live_seconds: float = 600.0,
         stall_timeout: float = 120.0, max_reconnects: int = 20):
     """Acquire from ``port`` into the SDS ``archive`` until interrupted.
@@ -540,7 +535,7 @@ def main(argv=None):
     p.add_argument("--gap-tol", type=float, default=2.0,
                    help="samples this many seconds late, and staying late, were lost: "
                         "the run ends (explicit gap)")
-    p.add_argument("--max-drift", type=float, default=0.5,
+    p.add_argument("--max-drift", type=float, default=1.0,
                    help="re-anchor the archive's clock when it is this far (s) from UTC")
     p.add_argument("--live-file", default=None,
                    help="mirror recent raw samples to this LOCAL file for a live viewer "

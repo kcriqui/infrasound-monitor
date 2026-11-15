@@ -22,8 +22,8 @@ fully into memory, and is converted on its next ``save_grid``/``append_grid``.
 
 Each hour's PSD is the Welch average over the hour's contiguous pieces of data
 (:mod:`waveforms`); breaks are never zero-filled.  All hours use one analysis
-rate, ``NOMINAL_FS``, so they share a frequency axis even though the recorder
-stores each segment's measured rate (they differ by ~1e-4, far below a bin).
+rate, ``NOMINAL_FS``, so they share a frequency axis whatever rate a piece of the
+archive was written at (they differ by ~1e-4 at most, far below a bin).
 """
 from __future__ import annotations
 import datetime as dt

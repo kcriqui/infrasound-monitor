@@ -10,9 +10,10 @@ So readers here join traces whose break is shorter than ``JOIN_TOL_S`` (those
 are timing corrections, not missing data: a real outage lasts at least the
 recorder's 15 s warm-up) and keep everything longer as a real gap, never filled.
 
-Traces may also differ slightly in sample rate: the recorder stores each segment's
-measured rate.  ObsPy's ``merge`` refuses mixed rates, so plotting code that needs
-one trace should call :func:`harmonize` first.
+Traces may also differ slightly in sample rate: the old archive is at 51.4287, the
+current one at the configured rate, and from 2026-11-12 to 11-14 the recorder wrote
+each segment's measured rate.  ObsPy's ``merge`` refuses mixed rates, so plotting
+code that needs one trace should call :func:`harmonize` first.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -55,7 +56,7 @@ def pieces(st, join_tol: float = JOIN_TOL_S) -> list[Piece]:
             data, s = data[k:], s + k / rate
         if parts and abs(s - end) < join_tol:
             parts.append(data)
-            end += len(data) / rate
+            end = s + len(data) / rate         # this trace's own end: steps don't add up
             continue
         if parts:
             out.append(Piece(start, fs, np.concatenate(parts)))

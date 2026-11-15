@@ -102,16 +102,17 @@ the SDS day files, splitting automatically at UTC midnight and (re)writing
 reconnect. Only one program can hold the port, so **close AmaSeis first** — this
 replaces it.
 
-**Timing.** The sensor's sample clock free-runs at about 51.42 sps and wanders by
-~1e-4 with temperature, i.e. seconds a day. A reader thread stamps every sample with
-the system clock as it arrives, so a slow disk can't delay the stamps. The writer then
-estimates when each sample was taken from the earliest arrivals, and gives each segment
-its measured rate. Consecutive segments abut exactly, so a run has no gaps however the
-clock wanders, and the archive stays within a few ms of UTC (NTP). ObsPy reads a whole
-day as one trace. The flush lines in `journalctl -u infra-acquire` show each segment's
-measured rate. Archives recorded before 2026-11 contain false 2 s breaks from the old
-fixed-rate clock (no samples are missing); the analysis reads across them rather than
-zero-filling them (`waveforms.py`).
+**Timing.** The sensor's sample clock free-runs: about 51.42 sps on average, but it
+wanders by ~3e-4 within hours, i.e. seconds a day. A reader thread stamps every sample
+with the system clock as it arrives, so a slow disk can't delay the stamps. The writer
+estimates when each sample was taken from the earliest arrivals. Everything is written
+at the one configured `sample_rate`, so `Stream.merge` works on any stretch. Whenever
+the archive's clock drifts 1 s from UTC (NTP), the next segment starts at the true time:
+a logged "timing correction", about 8 a day, each under a second, with no samples lost.
+The flush lines in `journalctl -u infra-acquire` show the sensor's measured rate; set
+`sample_rate` to its long-run mean. Archives recorded before 2026-11 contain false 2 s
+breaks from the old clock model (no samples are missing). The analysis reads across
+breaks shorter than 2.5 s rather than zero-filling them (`waveforms.py`).
 
 ```bash
 infra-acquire /dev/ttyUSB0 --sniff          # just print raw lines to eyeball the framing

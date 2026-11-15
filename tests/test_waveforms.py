@@ -29,6 +29,17 @@ def test_a_false_two_second_break_is_joined_without_filling():
     assert ps[0].start == T0.timestamp
 
 
+def test_a_chain_of_small_steps_stays_one_piece():
+    """Each step is judged on its own: ten 2 s steps in a row are not a 20 s gap."""
+    trs, t = [], T0
+    for _ in range(10):
+        tr = _tr(t, 1000)
+        trs.append(tr)
+        t = tr.stats.endtime + tr.stats.delta + 2.0
+    ps = pieces(Stream(trs))
+    assert len(ps) == 1 and len(ps[0].data) == 10000
+
+
 def test_a_real_outage_stays_a_gap():
     a = _tr(T0, 1000)
     b = _tr(a.stats.endtime + 30.0, 500)

@@ -100,35 +100,39 @@ def _read_raw(arch):
     return st
 
 
-def test_drifting_sensor_clock_leaves_no_gaps_and_keeps_time(tmp_path):
-    """The real sensor's rate wanders with temperature, here by 3e-5 either way
-    of the nominal.  The old writer cut a fake 2 s gap whenever the drift reached
-    gap_tol; now the run must stay one gap-free trace and stay on time."""
+def test_drifting_sensor_clock_stays_on_time_at_one_rate(tmp_path):
+    """The real sensor's rate wanders ~3e-4 within hours.  The archive must keep a
+    single sample rate (so Stream.merge works), lose and add no samples, and
+    stay within max_drift of the true time via small corrections."""
     arch = tmp_path / "archive"
-    w = SdsWriter(arch, DEFAULT_STATION, fs=51.422, flush_seconds=300, verbose=False)
-    n = int(4 * 3600 * 51.42)                                     # 4 hours
+    w = SdsWriter(arch, DEFAULT_STATION, fs=51.422, flush_seconds=300, max_drift=1.0,
+                  verbose=False)
+    n = int(12 * 3600 * 51.42)                                    # 12 hours
     t0 = UTCDateTime(2026, 11, 10, 3).timestamp
-    wander = lambda i: 51.4219 + 0.0015 * np.sin(2 * np.pi * i / (3 * 3600 * 51.42))
+    wander = lambda i: 51.4227 + 0.015 * np.sin(2 * np.pi * i / (6 * 3600 * 51.42))
     taken, arrive = _sensor(n, t0, wander, latency=0.016)
+    errs = []
     for i in range(n):
         w.add(i % 200, arrive[i])
+        if i % 15000 == 0 and w.seg_exact:                        # archive vs true time
+            errs.append(w._model(len(w.buf)) - taken[i])
     w.flush()
 
     st = _read_raw(arch)
-    assert len(st) == 1, f"ObsPy must see one trace, got {len(st)}"   # rates kept in band
-    st.merge(method=1)                                               # must not raise
+    assert len({tr.stats.sampling_rate for tr in st}) == 1        # one rate throughout
+    st.merge(method=1)                                             # must not raise
     ps = _pieces(arch)
-    assert len(ps) == 1 and len(ps[0].data) == n                    # nothing lost or added
-    # The archive's clock: the next segment would start at w.seg_start.  Compare with
-    # when sample n was really taken (one more sample period after the last).
+    assert len(ps) == 1 and len(ps[0].data) == n                  # nothing lost or added
+    assert max(abs(e) for e in errs) < 1.1
     true_end = taken[-1] + 1.0 / wander(np.array([n - 1]))[0]
-    assert abs(w.seg_start - true_end) < 0.05, w.seg_start - true_end
-    assert abs(UTCDateTime(t0) - st[0].stats.starttime) < 0.02     # first sample on time
+    assert abs(w.seg_start - true_end) < 1.1
+    assert abs(UTCDateTime(t0) - st[0].stats.starttime) < 0.02   # first sample on time
+    assert abs(w.fs_true - wander(np.array([n - 1]))[0]) < 0.003  # the log reports the sensor
 
 
-def test_rate_far_from_nominal_converges_with_a_logged_correction(tmp_path, capsys):
-    """A badly configured nominal rate (0.1% off) is outside the rate band, so the
-    writer re-anchors once, then tracks the real rate."""
+def test_rate_far_from_nominal_is_corrected_in_logged_steps(tmp_path, capsys):
+    """A badly configured nominal rate (0.1% off) keeps the archive on time through
+    repeated logged corrections, and the log shows the real rate to configure."""
     arch = tmp_path / "archive"
     w = SdsWriter(arch, DEFAULT_STATION, fs=51.48, flush_seconds=300, verbose=False)
     n = int(2 * 3600 * 51.42)
@@ -139,7 +143,7 @@ def test_rate_far_from_nominal_converges_with_a_logged_correction(tmp_path, caps
     w.flush()
     assert "timing correction" in capsys.readouterr().out
     assert abs(w.fs_true - 51.42) < 0.002
-    assert abs(w.seg_start - (taken[-1] + 1 / 51.42)) < 0.05
+    assert abs(w.seg_start - (taken[-1] + 1 / 51.42)) < 1.1
     assert len(_pieces(arch)) == 1                         # a correction is not a gap
 
 

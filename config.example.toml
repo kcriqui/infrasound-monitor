@@ -20,10 +20,11 @@ latitude  = 0.0
 longitude = 0.0
 elevation = 0.0        # metres above sea level
 
-# Sample rate of YOUR unit, samples/s. The recorder measures the real rate and stores it
-# per segment, so this is only its starting estimate and the analysis rate (keep it
-# fixed once a PSD grid exists, or the grid is recomputed). After a day of recording,
+# Sample rate of YOUR unit, samples/s: written to the archive and used by the analysis.
+# The sensor's clock wanders, so the recorder keeps time with small logged corrections;
+# the closer this is to the long-run mean, the fewer. After a day of recording,
 # `journalctl -u infra-acquire | tail` shows the measured rate in each "flushed" line.
+# Keep it fixed once a PSD grid exists, or the grid is recomputed.
 sample_rate = 51.422
 
 # Local time = UTC + this many hours (Pacific Standard = -8, Pacific Daylight = -7,

@@ -238,6 +238,8 @@ def g_figure(res):
             fontsize=8, color="0.4", va="top")
     if res["mode"] == "change date":
         ax.axvline(np.datetime64(res["split"], "D"), color="0.3", lw=0.8)
+    lo = np.nanmin([x[1] for x in g["days"]] + [g["quietest"]])
+    ax.set_ylim(bottom=lo - 5)            # room under the floor line for its label
     ax.set_ylabel("dB(G)")
     ax.legend(fontsize=8, loc="upper right")
     fig.autofmt_xdate(); fig.tight_layout()

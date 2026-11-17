@@ -295,7 +295,8 @@ def figure(res, top=8):
     source's local hour-of-day presence."""
     times = res["times"]; srcs = res["sources"][:top]
     fig = plt.figure(figsize=(12, 6.2))
-    gs = fig.add_gridspec(2, 1, height_ratios=[2.2, 1], hspace=0.35)
+    # the right margin holds the legend, so it never covers tracks
+    gs = fig.add_gridspec(2, 1, height_ratios=[2.2, 1], hspace=0.35, left=0.06, right=0.74)
     ax = fig.add_subplot(gs[0])
     xnum = mdates.date2num(times)
     for name, lo, hi, _ in KNOWN_TONES:
@@ -307,7 +308,8 @@ def figure(res, top=8):
     ax.set_yscale("log"); ax.set_ylim(FMIN, 20)
     ax.set_ylabel("Frequency (Hz)"); ax.xaxis_date()
     ax.axvline(mdates.date2num(res["split"]), color="0.4", lw=0.8, ls="--")
-    ax.legend(fontsize=7, markerscale=4, loc="upper left", ncol=2)
+    ax.legend(fontsize=7, markerscale=4, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+              borderaxespad=0, frameon=False)
     ax.set_title("Tracked tones (grey bands: known sources; dashed: start of the recent window)",
                  fontsize=10)
     ax2 = fig.add_subplot(gs[1])

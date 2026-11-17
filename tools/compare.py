@@ -8,7 +8,8 @@ compares like with like:
 
 1. Per UTC hour, the level in each octave band (dB SPL re 20 uPa, from the PSD
    grid) and the mean wind at the airport (``infrasound_monitor.weather``).
-   Hours with rain or without weather data are left out.
+   Hours with rain or without weather data are left out.  One extra "band" is the
+   ISO 7196 G-weighted level, dB(G), the measure infrasound guidelines are written in.
 2. From the "before" hours, the baseline's level as a function of wind: the
    median level in narrow wind bins, interpolated between them.
 3. Each hour's residual is its level minus that baseline curve at its own wind.
@@ -48,6 +49,41 @@ WIND_EDGES = (0.0, 1.0, 2.0, 3.0, 4.5, 6.5, 9.0, np.inf)   # m/s, for the summar
 CURVE_EDGES = tuple(np.arange(0.0, 8.01, 0.5)) + (10.0, 13.0, np.inf)   # baseline-curve bins
 RAIN_MM = 0.2                                              # hours wetter than this are skipped
 
+# ISO 7196:1995 G-weighting at one-third-octave centres, dB relative to 10 Hz.  It
+# weights infrasound by how people perceive it: ~12 dB/octave up from 1 to 20 Hz,
+# then 24 dB/octave down on both sides.  It's the measure guidelines are written in
+# (Denmark recommends at most 85 dB(G) indoors; ISO 7196 notes that levels below
+# about 90 dB(G) aren't normally significant for perception).
+G_TABLE = ((0.25, -88.0), (0.315, -80.0), (0.4, -72.1), (0.5, -64.3), (0.63, -56.6),
+           (0.8, -49.5), (1.0, -43.0), (1.25, -37.5), (1.6, -32.6), (2.0, -28.3),
+           (2.5, -24.1), (3.15, -20.0), (4.0, -16.0), (5.0, -12.0), (6.3, -8.0),
+           (8.0, -4.0), (10.0, 0.0), (12.5, 4.0), (16.0, 7.7), (20.0, 9.0), (25.0, 3.7),
+           (31.5, -4.0), (40.0, -12.0), (50.0, -20.0), (63.0, -28.0), (80.0, -36.0),
+           (100.0, -44.0), (125.0, -52.0), (160.0, -60.0), (200.0, -68.0),
+           (250.0, -76.0), (315.0, -84.0))
+G_FMAX = 20.0          # the sensor's anti-alias corner: nothing above it is measured
+G_LABEL = "G-weighted"
+GUIDE_DBG = 85.0       # Danish EPA recommended indoor limit, dB(G)
+
+
+def g_weight_db(f):
+    """ISO 7196 G-weighting in dB at frequencies ``f`` (Hz): the standard's table,
+    interpolated in log-frequency and extended at its 24 dB/octave slopes."""
+    f = np.atleast_1d(np.asarray(f, float))
+    tf = np.log2([r[0] for r in G_TABLE]); tg = np.array([r[1] for r in G_TABLE])
+    lf = np.log2(np.maximum(f, 1e-9))
+    g = np.interp(lf, tf, tg)
+    g = np.where(lf < tf[0], tg[0] + 24.0 * (lf - tf[0]), g)
+    return np.where(lf > tf[-1], tg[-1] - 24.0 * (lf - tf[-1]), g)
+
+
+def g_weights(freqs):
+    """Power weights for the G-weighted level, zero above what the sensor measures.
+    The INFRA20 stops at 20 Hz, where G-weighting peaks, so energy at 20-50 Hz (which
+    the weighting would count) is missing: read the result as a lower bound."""
+    freqs = np.asarray(freqs, float)
+    return 10.0 ** (g_weight_db(freqs) / 10.0) * (freqs <= G_FMAX)
+
 
 def band_defs(freqs, centres=OCTAVES):
     """[(label, mask)] of octave bands that fit inside the grid's frequency range."""
@@ -61,15 +97,16 @@ def band_defs(freqs, centres=OCTAVES):
 
 
 def band_levels(freqs, psd, have, bands):
-    """[nhours, nbands] band level in dB SPL; NaN for gap hours.  Streams the grid."""
+    """[nhours, nbands] band level in dB re 20 uPa; NaN for gap hours.  Streams the grid.
+    Each band is (label, weights): a boolean mask (an octave band) or per-frequency
+    power weights (the G-weighting)."""
     df = float(np.median(np.diff(freqs)))
+    W = np.column_stack([np.asarray(w, float) for _, w in bands]) * df
     out = np.full((len(psd), len(bands)), np.nan)
     for lo, hi, blk in iter_blocks(psd, have):
-        lin = 10.0 ** (blk / 10.0)                              # Pa^2/Hz
-        for j, (_, m) in enumerate(bands):
-            p = lin[:, m].sum(axis=1) * df                      # Pa^2
-            with np.errstate(divide="ignore", invalid="ignore"):
-                out[lo:hi, j] = 10 * np.log10(p / P_REF_PA ** 2)
+        lin = np.nan_to_num(10.0 ** (np.asarray(blk, float) / 10.0))    # Pa^2/Hz
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[lo:hi] = 10 * np.log10(lin @ W / P_REF_PA ** 2)        # Pa^2 -> dB
     out[~have] = np.nan
     return out
 
@@ -156,6 +193,57 @@ def wind_level_correlation(L, wx, select):
     return np.array([spearmanr(wx["wind"][ok], L[ok, j]).statistic for j in range(L.shape[1])])
 
 
+def g_levels(times, G, night, split):
+    """G-weighted level summaries: before/after, night/all hours, and per day.
+    Absolute levels, not wind-matched: they answer "how loud", the change table
+    answers "louder than before"."""
+    t = np.array(times, dtype="datetime64[h]")
+    ok = np.isfinite(G)
+    after = t >= np.datetime64(split, "h")
+
+    def stats(m):
+        m = m & ok
+        if not m.any():
+            return None
+        g = G[m]; k = np.flatnonzero(m)[np.argmax(g)]
+        return dict(n=int(m.sum()), med=float(np.median(g)), p95=float(np.percentile(g, 95)),
+                    max=float(g.max()), t_max=times[k])
+    day = (t - np.timedelta64(12, "h")).astype("datetime64[D]")     # noon-to-noon UTC
+    days = []
+    for d in np.unique(day[ok]):
+        m = ok & (day == d)
+        n = m & night
+        days.append((d.astype(dt.datetime), float(np.median(G[n])) if n.any() else np.nan,
+                     float(G[m].max())))
+    q = np.flatnonzero(ok)
+    quiet = float(G[q].min()) if len(q) else np.nan
+    return dict(g=dict(before_night=stats(~after & night), after_night=stats(after & night),
+                       before_all=stats(~after), after_all=stats(after),
+                       days=days, quietest=quiet, guide=GUIDE_DBG))
+
+
+def g_figure(res):
+    """Each night's median G-weighted level and each day's loudest hour, with the
+    guideline and the quietest hour on record (roughly the sensor's own floor)."""
+    g = res["g"]
+    d = np.array([x[0] for x in g["days"]], dtype="datetime64[D]")
+    fig, ax = plt.subplots(figsize=(12, 3.6))
+    ax.plot(d, [x[2] for x in g["days"]], ".", color="#c2571a", ms=4, label="loudest hour of the day")
+    ax.plot(d, [x[1] for x in g["days"]], "-", color="#0d8b88", lw=1.4, label="night median")
+    ax.axhline(g["guide"], color="#b03030", ls="--", lw=1)
+    ax.text(d[0], g["guide"] + 0.6, f"{g['guide']:.0f} dB(G): Danish indoor guideline",
+            fontsize=8, color="#b03030", va="bottom")
+    ax.axhline(g["quietest"], color="0.55", ls=":", lw=1)
+    ax.text(d[0], g["quietest"] - 0.6, f"quietest hour on record, {g['quietest']:.0f} dB(G)",
+            fontsize=8, color="0.4", va="top")
+    if res["mode"] == "change date":
+        ax.axvline(np.datetime64(res["split"], "D"), color="0.3", lw=0.8)
+    ax.set_ylabel("dB(G)")
+    ax.legend(fontsize=8, loc="upper right")
+    fig.autofmt_xdate(); fig.tight_layout()
+    return fig
+
+
 def analyse(grid, split=None, recent_days=RECENT_DAYS, hours="night", stations=None,
             wx_dir=WEATHER_DIR, night_window=5, n_boot=400):
     """Everything the dashboard and the CLI need, from a loaded grid."""
@@ -163,7 +251,7 @@ def analyse(grid, split=None, recent_days=RECENT_DAYS, hours="night", stations=N
     times = list(grid["times"]); freqs = np.asarray(grid["freqs"], float)
     psd = grid["psd_db"]
     have = have_mask(psd)
-    bands = band_defs(freqs)
+    bands = band_defs(freqs) + [(G_LABEL, g_weights(freqs))]
     labels = [b[0] for b in bands]
     L = band_levels(freqs, psd, have, bands)
     wx = weather.hourly(times, stations, wx_dir)
@@ -177,8 +265,10 @@ def analyse(grid, split=None, recent_days=RECENT_DAYS, hours="night", stations=N
         split = (times[-1] + dt.timedelta(hours=1) - dt.timedelta(days=recent_days)).replace(
             minute=0, second=0, microsecond=0)
     res = compare(times, L, wx, split, select, labels, n_boot=n_boot)
+    res.update(g_levels(times, L[:, labels.index(G_LABEL)], night, split))
     res.update(mode=mode, hours=hours, night_hours=night_hours, recent_days=recent_days,
-               stations=wx["stations"], centres=[float(l.split()[0]) for l in labels],
+               stations=wx["stations"],
+               centres=[float(l.split()[0]) for l in labels if l != G_LABEL],
                wind_hours=int(np.isfinite(wx["wind"]).sum()), n_hours=len(times),
                station_hours=[int((wx["station"] == i).sum()) for i in range(len(wx["stations"]))],
                corr=wind_level_correlation(L, wx, select))
@@ -189,10 +279,12 @@ def figure(res, show_bands=("1 Hz", "4 Hz", "16 Hz")):
     """Left: wind-matched change per band (90% interval), raw change for contrast.
     Right: median level against wind, before and after, for a few bands."""
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.2), gridspec_kw=dict(width_ratios=[1.25, 1]))
-    x = np.array(res["centres"])
-    d, lo, hi = res["delta"], res.get("lo"), res.get("hi")
+    x = np.array(res["centres"]); n = len(x)           # octave bands only, not the G level
+    d, lo, hi = res["delta"][:n], res.get("lo"), res.get("hi")
+    if lo is not None:
+        lo, hi = lo[:n], hi[:n]
     a1.axhline(0, color="0.6", lw=0.8)
-    a1.scatter(x, res["raw"], marker="o", facecolors="none", edgecolors="0.55",
+    a1.scatter(x, res["raw"][:n], marker="o", facecolors="none", edgecolors="0.55",
                label="raw change (not wind-matched)", zorder=2)
     if lo is not None:
         a1.errorbar(x, d, yerr=[d - lo, hi - d], fmt="o", color="#0d8b88", capsize=3,
@@ -231,8 +323,18 @@ def print_report(res):
     for j, lab in enumerate(res["labels"]):
         lo = res.get("lo", [np.nan] * len(res["labels"]))[j]
         hi = res.get("hi", [np.nan] * len(res["labels"]))[j]
-        print(f"  {lab:8s} {res['delta'][j]:+6.1f} dB [{lo:+5.1f}, {hi:+5.1f}]"
-              f"          {res['raw'][j]:+6.1f} dB      {res['corr'][j]:+.2f}")
+        print(f"  {lab:10s} {res['delta'][j]:+6.1f} dB [{lo:+5.1f}, {hi:+5.1f}]"
+              f"        {res['raw'][j]:+6.1f} dB      {res['corr'][j]:+.2f}")
+    g = res.get("g")
+    if g:
+        print(f"\nG-weighted level, dB(G) (ISO 7196, 0.25-{G_FMAX:g} Hz; a lower bound, "
+              f"the sensor misses 20-50 Hz):")
+        for k in ("before_night", "after_night", "before_all", "after_all"):
+            s = g[k]
+            if s:
+                print(f"  {k.replace('_', ' '):13s} median {s['med']:5.1f}  p95 {s['p95']:5.1f}  "
+                      f"max {s['max']:5.1f} ({s['t_max']:%Y-%m-%d %H:00} UTC)  [{s['n']} h]")
+        print(f"  quietest hour on record {g['quietest']:.1f}; guideline {g['guide']:g}")
     print("\nhours per wind bin (before / after):")
     for b in res["bins"]:
         hi = "" if np.isinf(b["hi"]) else f"{b['hi']:g}"

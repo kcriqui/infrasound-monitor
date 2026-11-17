@@ -63,3 +63,51 @@ def test_band_levels_integrate_power():
     expect = 10 * np.log10(1e-4 * width / (20e-6) ** 2)
     assert abs(L[0, j] - expect) < 1e-6
     assert np.isnan(L[2]).all()
+
+
+def _g_polezero_db(f):
+    """ISO 7196 G-weighting from its pole-zero definition (poles in Hz, x 2*pi), as an
+    independent check on the table: four zeros at 0 Hz, eight poles."""
+    poles = 2 * np.pi * np.array([-0.707 + 0.707j, -0.707 - 0.707j,
+                                  -19.27 + 5.16j, -19.27 - 5.16j,
+                                  -14.11 + 14.11j, -14.11 - 14.11j,
+                                  -5.16 + 19.27j, -5.16 - 19.27j])
+
+    def h(x):
+        s = 2j * np.pi * np.asarray(x, float)
+        return np.abs(s ** 4 / np.prod([s - p for p in poles], axis=0))
+    return 20 * np.log10(h(f) / h(10.0))
+
+
+def test_g_weighting_matches_iso_7196():
+    f = np.array([r[0] for r in compare.G_TABLE])
+    assert np.allclose(compare.g_weight_db(f), [r[1] for r in compare.G_TABLE])
+    assert compare.g_weight_db(10.0)[0] == 0.0
+    band = (f >= 1.0) & (f <= 40.0)               # where the pole-zero form is quoted to 0.1 dB
+    assert np.abs(compare.g_weight_db(f[band]) - _g_polezero_db(f[band])).max() < 0.5
+    w = compare.g_weights(np.array([10.0, 19.9, 20.5]))
+    assert w[0] == 1.0 and w[1] > 7.0 and w[2] == 0.0  # nothing above the sensor's 20 Hz corner
+
+
+def test_g_level_of_a_10_hz_tone_is_its_spl():
+    freqs = np.linspace(0.05, 25, 5000)
+    df = freqs[1] - freqs[0]
+    psd = np.full((1, len(freqs)), -200.0)
+    k = np.argmin(np.abs(freqs - 10.0))
+    psd[0, k] = 10 * np.log10(1.0 / df)              # a 1 Pa^2 (1 Pa rms) tone at 10 Hz
+    L = compare.band_levels(freqs, psd, np.array([True]),
+                            [("G", compare.g_weights(freqs))])
+    assert abs(L[0, 0] - 10 * np.log10(1.0 / (20e-6) ** 2)) < 0.05   # 94 dB(G), weight 0 dB
+
+
+def test_g_levels_summaries():
+    times = [T0 + dt.timedelta(hours=i) for i in range(24 * 10)]
+    G = np.full(len(times), 60.0)
+    G[-5] = 88.0                                       # one loud recent hour
+    G[3] = np.nan
+    night = np.array([t.hour in (10, 11, 12) for t in times])
+    split = T0 + dt.timedelta(days=7)
+    g = compare.g_levels(times, G, night, split)["g"]
+    assert g["after_all"]["max"] == 88.0 and g["after_all"]["t_max"] == times[-5]
+    assert g["before_night"]["med"] == 60.0 and g["before_all"]["n"] == 24 * 7 - 1
+    assert g["quietest"] == 60.0 and len(g["days"]) >= 10

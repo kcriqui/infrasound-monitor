@@ -251,6 +251,14 @@ which checks that the baseline is stable. The dashboard shows the same compariso
 Seasonal sources still show (ocean microbaroms grow from September and lift the lowest
 bands), so read those with the calendar in mind.
 
+It also reports the **G-weighted level** (ISO 7196, dB(G)), which weights infrasound by
+how people perceive it and is what guidelines use (Denmark recommends at most 85 dB(G)
+indoors). The wind-matched change includes a G-weighted row, and the dashboard plots each
+night's median and each day's loudest hour against the guideline. G-weighting peaks at
+20 Hz, where the INFRA20's anti-alias filter cuts off, so the 20–50 Hz energy it would
+count isn't measured: read the level as a lower bound. Quiet nights sit at the sensor's
+own noise floor, about 55 dB(G).
+
 `tools/transients.py` is an **infrasound event explorer**: it detects transients
 (STA/LTA over a 2–15 Hz band), **characterizes** each (duration, spectral centroid,
 bandwidth, tonality, frequency drift), **classifies** them (tonal / rumble / glide /
@@ -276,8 +284,8 @@ python tools/transients.py ~/infra-archive \
       and a TrueNAS SCALE job that pulls the archive as a backup (`deploy/truenas/`)
 - [x] Tone tracker: drifting tones followed hour to hour, grouped into scheduled/steady sources
 - [x] Wind-matched before/after comparison (`tools/compare.py`, airport weather via `infra-weather`)
-- [x] Recorder clock tracks the sensor's wandering rate: no false gaps, archive time within ms of UTC
-- [ ] G-weighting (ISO 7196) for health-threshold context
+- [x] G-weighted level (ISO 7196) against the indoor guideline, absolute and wind-matched
+- [x] Recorder clock tracks the sensor's wandering rate: no false gaps, archive time within 1 s of UTC
 - [ ] Event attribution — correlate transients with train (GTFS) + aircraft (ADS-B) data
 - [ ] Serve the live archive over SeedLink for real-time remote views
 - [ ] Relocate the sensor to a quiet outdoor site (it moved to a quieter indoor spot on

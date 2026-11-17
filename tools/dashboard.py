@@ -128,7 +128,9 @@ def build(archive, start, end, out_html, cfg, cache=None, nperseg=8192,
                 span_days=(end - start).days, tones=tones,
                 night_label=night_label,
                 overall=next((b for b in bands if b["band"].startswith("0.05–20")), None))
-    change_html = _change_section(grid, night_label)
+    cres = _compare(grid)
+    kpis["g"] = cres.get("g") if cres else None
+    change_html = _change_section(cres, night_label)
     html = _render(cfg, start, end, meta, kpis, bands, imgs,
                    has_interactive=(Path(out_html).parent / "waterfall_full.html").exists(),
                    change_html=change_html)
@@ -162,17 +164,56 @@ def _tone_tracker(grid):
     return res
 
 
-def _change_section(grid, night_label):
-    """The wind-matched before/after section, or a note saying what it needs.
+def _compare(grid):
+    """The before/after analysis (with the G-weighted levels), or None.
     Never fails the page: the rest of the dashboard is worth publishing anyway."""
+    if not WEATHER_STATIONS:
+        return None
+    try:
+        return compare.analyse(grid, dt.datetime.fromisoformat(CHANGE_DATE) if CHANGE_DATE else None)
+    except Exception as e:                       # bad weather file, too little data, ...
+        print(f"  change monitor skipped: {e}")
+        return None
+
+
+def _g_html(res):
+    """The G-weighted level subsection: absolute levels against the guideline."""
+    g = res.get("g")
+    if not g or not g["days"]:
+        return ""
+    img = report._fig_b64(compare.g_figure(res))
+    rows = []
+    for key, name in (("before_night", "Earlier, night"), ("after_night", "Later, night"),
+                      ("before_all", "Earlier, all hours"), ("after_all", "Later, all hours")):
+        s = g[key]
+        if s:
+            rows.append(f'<tr><td>{name}</td><td class="num">{s["med"]:.1f}</td>'
+                        f'<td class="num">{s["p95"]:.1f}</td><td class="num">{s["max"]:.1f}</td>'
+                        f'<td>{s["t_max"]:%Y-%m-%d %H:00} UTC</td></tr>')
+    return f"""<h2 style="margin-top:28px">G-weighted level</h2>
+    <p class="cap">Infrasound weighted by how people perceive it (ISO 7196 G-weighting, in
+    dB(G)), the measure that guidelines use: Denmark recommends at most {g['guide']:.0f} dB(G)
+    indoors, and ISO 7196 notes that levels below about 90 dB(G) are not normally significant
+    for perception. These are absolute levels, not wind-matched; the "G-weighted" row in the
+    table above gives the wind-matched change.</p>
+    <details class="explain"><summary>Limits of this number</summary>
+    <p>G-weighting peaks at 20 Hz, exactly where this sensor's anti-alias filter cuts off,
+    so energy at 20–50 Hz that the weighting would count is not measured: read these as lower
+    bounds. The sensor's own noise sets a floor (the dotted line, the quietest hour on record),
+    and quiet nights sit close to it. The calibration is good to about ±20% (±1.6 dB).</p></details>
+    <div class="figure"><img alt="G-weighted level per day" src="{img}"></div>
+    <table class="below"><thead><tr><th>Hours</th><th class="num">Median</th>
+    <th class="num">95th pct</th><th class="num">Loudest</th><th>Loudest hour</th></tr></thead>
+    <tbody>{"".join(rows)}</tbody></table>"""
+
+
+def _change_section(res, night_label):
+    """The wind-matched before/after section, or a note saying what it needs."""
     head = '<section>\n    <p class="eyebrow">Change monitor · wind-matched</p>\n'
     if not WEATHER_STATIONS:
         return (head + '    <h2>Before / after</h2>\n    <p class="cap">Needs a wind record: set '
                 '<code>[weather] stations</code> in config.toml (see README).</p>\n  </section>')
-    try:
-        res = compare.analyse(grid, dt.datetime.fromisoformat(CHANGE_DATE) if CHANGE_DATE else None)
-    except Exception as e:                       # bad weather file, too little data, ...
-        print(f"  change monitor skipped: {e}")
+    if res is None:
         return ""
     if not res["n_after"] or not res["n_before"]:
         return (head + '    <h2>Before / after</h2>\n    <p class="cap">Not enough hours with '
@@ -208,6 +249,7 @@ def _change_section(grid, night_label):
     <table class="below"><thead><tr><th>Band</th><th class="num">Change dB</th>
     <th class="num">90% interval</th><th class="num">Raw dB</th></tr></thead>
     <tbody>{rows}</tbody></table>
+    {_g_html(res)}
   </section>"""
 
 
@@ -233,6 +275,18 @@ def _tile(label, value, sub="", state=""):
             f'<div class="tile-val">{value}</div>{sub}</div>')
 
 
+def _g_tile(g):
+    """Recent night median G-weighted level, with the loudest recent hour."""
+    s = g and (g["after_night"] or g["before_night"])
+    if not s:
+        return _tile("Infrasound, G-wtd", "—", "needs weather data")
+    loud = g["after_all"] or g["before_all"]
+    state = "warn" if loud["max"] >= g["guide"] else "ok"
+    return _tile("Infrasound, G-wtd", f'{s["med"]:.0f}<span class="unit"> dB(G)</span>',
+                 f'night median · loudest hour {loud["max"]:.0f} · guideline {g["guide"]:.0f}',
+                 state)
+
+
 def _render(cfg, start, end, meta, k, bands, imgs, has_interactive, change_html=""):
     now = dt.datetime.now()
     tones = k["tones"]
@@ -255,6 +309,7 @@ def _render(cfg, start, end, meta, k, bands, imgs, has_interactive, change_html=
         _tile("Steady tone", verdict_word, verdict_sub, verdict_state),
         _tile("Ambient level", noise_spl.split()[0] + '<span class="unit"> dB SPL</span>',
               "median, 0.05–20 Hz"),
+        _g_tile(k.get("g")),
         _tile("Coverage", f'{k["span_days"]}<span class="unit"> days</span>',
               f'{k["nights"]} nights analyzed'),
         _tile("Quiet window", k["night_label"].split("·")[1].strip(),
